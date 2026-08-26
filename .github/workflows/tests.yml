@@ -1,0 +1,24 @@
+name: tests
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  tests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install runtime and test dependencies
+        run: pip install -r requirements-dev.txt
+      # The dbt export's test runs dbt itself over the merged project, so this
+      # job is where "dbt accepts our output" is actually established. Without
+      # CASSIS_API_KEY the `cassis ontology check` case SKIPs and the rest still
+      # runs — a fresh clone with no secret gets a green suite, not a red one.
+      - name: Kit tests, including the export round trips
+        env:
+          CASSIS_API_KEY: ${{ secrets.CASSIS_API_KEY }}
+        run: python3 tests/test_kit.py

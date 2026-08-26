@@ -1,0 +1,22 @@
+schema_name: MAIN
+table_name: ORDERS
+domain_path: commerce
+description: One row per order placed in the store.
+grain:
+- ORDER_ID
+columns:
+- name: CUSTOMER_ID
+  description: Customer who placed the order.
+  data_type: VARCHAR
+- name: ORDER_ID
+  description: Primary key of the order, assigned by the storefront at checkout.
+  data_type: VARCHAR
+- name: PLACED_AT
+  data_type: TIMESTAMP
+- name: STATUS
+  description: 'Order lifecycle status: completed or cancelled.'
+  data_type: VARCHAR
+- name: TOTAL_AMOUNT
+  description: Order total in EUR, tax included. Cancelled orders keep their amount.
+  unit: EUR
+  data_type: DECIMAL

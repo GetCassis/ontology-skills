@@ -1,0 +1,26 @@
+version: 2
+
+# Hand-written by the project's own team. The exporter must leave this comment,
+# every description already here, and the ordering of these keys alone.
+models:
+  - name: orders
+    description: "One row per order placed in the store."
+    meta:
+      owner: analytics-team
+    columns:
+      - name: order_id
+        description: '{{ doc("order_id_doc") }}'
+        data_tests:
+          - unique
+          - not_null
+      # the old spelling, on one column, while order_id above uses the new one
+      # — a real project mixes them, and dbt rejects a column carrying both
+      - name: customer_id
+        tests:
+          - not_null
+      - name: status
+        description: "Order lifecycle status: completed or cancelled."
+      - name: total_amount
+      - name: placed_at
+
+  - name: customers

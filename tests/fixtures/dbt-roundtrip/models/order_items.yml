@@ -1,0 +1,16 @@
+version: 2
+
+models:
+  - name: order_items
+    columns:
+      - name: order_id
+        data_tests:
+          - relationships:
+              to: ref('orders')
+              field: order_id
+      - name: quantity
+      # the same column declared a second time, which a real 2,900-model
+      # project does: dbt warns and picks one, and adding our join test here
+      # while the first declaration already carries it is a hard dbt error
+      - name: order_id
+        description: ""

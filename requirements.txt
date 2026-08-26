@@ -1,0 +1,18 @@
+# Runtime. Three packages, all pure-python: `git clone` plus
+# `pip install -r requirements.txt` is the whole install.
+
+pyyaml>=6.0
+
+# profile.py: one canonical statement transpiled per dialect, and validated
+# offline before anyone runs it in a warehouse. Also what adapters/vendor/
+# inventory.py parses dbt SQL with.
+sqlglot>=25.0
+
+# emit.py --emit dbt: writes back into the customer's OWN schema.yml files, so
+# it needs a round-trip loader. PyYAML re-serializes and drops every comment in
+# the file, which is not a merge, it is a rewrite of somebody else's work.
+ruamel.yaml>=0.17
+
+# Test-only dependencies are in requirements-dev.txt, deliberately kept out of
+# here: dbt-core pulls in dozens of packages and nobody should need it to run
+# the kit.

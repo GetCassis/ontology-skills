@@ -1,0 +1,10 @@
+name: roundtrip
+version: "1.0.0"
+config-version: 2
+profile: roundtrip
+
+model-paths: ["models"]
+
+models:
+  roundtrip:
+    +materialized: table

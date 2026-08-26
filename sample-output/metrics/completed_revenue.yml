@@ -1,0 +1,10 @@
+name: completed_revenue
+display_name: Completed revenue
+domain_path: commerce
+table_schema: MAIN
+table_name: ORDERS
+expression: SUM(TOTAL_AMOUNT)
+filters: STATUS = 'completed'
+synonyms:
+- net revenue
+description: Cancelled orders keep their amount, so the filter is mandatory.

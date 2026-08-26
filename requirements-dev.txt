@@ -1,0 +1,19 @@
+# Tests only. `pip install -r requirements-dev.txt` before `python3
+# tests/test_kit.py`; without these the tests that need them SKIP rather than
+# fail, so a fresh clone still gets a green run.
+-r requirements.txt
+
+# profile.py's generated SQL is EXECUTED against a real engine, because a
+# parser accepting the SQL is not evidence a warehouse will run it.
+duckdb>=1.0
+
+# The dbt export is tested by handing the merged project to dbt itself:
+# `dbt parse` and `dbt docs generate` have to accept it, and the
+# `meta.cassis.*` blocks have to survive into target/manifest.json.
+dbt-core>=1.9
+dbt-duckdb>=1.9
+
+# `cassis ontology check` is an optional integration. It needs cassis-cli
+# from its distribution channel plus CASSIS_API_KEY; the test SKIPs without
+# either. Keep it out of this file until it is available from the same Python
+# package index, so the documented fresh-clone test install remains reproducible.

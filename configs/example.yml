@@ -1,0 +1,54 @@
+# What intake.py writes, shown as a shape. `python3 intake.py questions` asks the
+# eight questions and `intake.py write` produces one of these — reach for this file
+# only to see what the keys mean, never to fill in by hand and skip the intake.
+#
+# Paths are yours and they are absolute. Point BOOTSTRAP_FIXTURES at wherever your
+# input bundles live and the driver expands it, which keeps a run config free of
+# your home directory: nothing here should identify whose machine it ran on.
+name: example
+
+# "no" means: no connection attempts of ANY kind, no profiling, no retry. Questions
+# only the warehouse could settle go to QUESTIONS.md instead.
+warehouse_access: false
+
+# How much of the warehouse this pass covers. sample = ~10 tables carrying one
+# story, full = the 20-30 that answer your top questions. It moves the scope
+# target and the cost, nothing else.
+profile: sample
+
+# Confirmed absent at intake — these do not exist for this run. An empty evidence
+# class here is expected: nothing goes hunting for it and nothing asks again.
+confirmed_absent:
+  - bi_corpus
+  - query_history
+
+# What you most want answered. The scope checkpoint starts from these, so vague
+# ones cost you a worse scope rather than nothing.
+top_questions:
+  - 'What is monthly revenue, and how does it split by product?'
+  - 'How many active customers are there, and how is active defined?'
+
+input: $BOOTSTRAP_FIXTURES/example/dbt-project    # the dbt project, or a dbt docs export
+adapter: dbt                                     # dbt | dbtdocs | generic
+schema: $BOOTSTRAP_FIXTURES/example/schema.csv    # every table and column, from your
+                                                 # information schema
+
+workspace: $BOOTSTRAP_FIXTURES/example/workspace  # normalized inputs land here
+run: $BOOTSTRAP_FIXTURES/example/run-YYYY-MM-DD   # the ontology and every report
+batches: 12                                      # more, smaller batches finish sooner
+
+# Every documentation shape is optional and repeatable. glossary_dirs is a column
+# dictionary keyed by column name; context_dirs is anything else — prose, exports,
+# code; docs_dirs is free-form documentation, which answers the blocking questions
+# rather than filling in columns.
+# glossary_dirs:
+#   - $BOOTSTRAP_FIXTURES/example/glossary
+# context_dirs:
+#   - $BOOTSTRAP_FIXTURES/example/notebooks
+# docs_dirs:
+#   - $BOOTSTRAP_FIXTURES/example/wiki
+# dashboards_dirs:
+#   - $BOOTSTRAP_FIXTURES/example/dashboards
+
+# scope_file: where your scoping decision is recorded (defaults to <run>/scope.tsv)
+# emit: [dbt]                 # extra export targets; the Cassis tree always emits

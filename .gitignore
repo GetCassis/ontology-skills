@@ -1,0 +1,64 @@
+# Warehouse data NEVER enters this repo. Not in a private one, not once, not
+# "temporarily" — git history is permanent and a repo is a new copy under new
+# access control. Input bundles move out-of-band and live wherever
+# BOOTSTRAP_FIXTURES points.
+data/
+fixtures/
+# tests/fixtures/ is the exception, and it is not warehouse data: a four-model dbt
+# project written for this repo, which the export round trip needs on a fresh
+# clone. `fixtures/` above kept it untracked, so the suite passed here and would
+# have failed for anyone else.
+!tests/fixtures/
+*/input/
+*/workspace*/
+*.duckdb
+
+# Run artifacts: regenerable from the inputs, and they contain warehouse content.
+run/
+run-*/
+*-run/
+packets/
+profile/
+briefs/
+decisions/
+cassis/
+workspace/
+QUESTIONS.md
+TREE.md
+questions*.yml
+questions*.md
+verify_*.json
+judge_*.json
+*_findings.json
+column_glossary.json
+column_comments.json
+declared_keys.json
+scope-proposed.tsv
+prefill_report.json
+batches.json
+joins_draft.yml
+# Run configs name YOUR paths. intake.py writes them here, and a config that
+# reached the tree carried an absolute home directory into a repo meant to be
+# copied to a public one — a leak neither the customer-name tier nor the
+# identifier tier of the release gate can see. Only the example ships.
+configs/*.yml
+!configs/example.yml
+
+docs-packets/
+docs_candidates.json
+docs_answers.yml
+docs_score.json
+
+# Gold / evaluation material: the answers.
+gold*/
+gold*.json
+scope-gold*.txt
+scope-*.txt
+fixture*.csv
+test-cases/
+verdicts.json
+
+__pycache__/
+*.pyc
+.DS_Store
+.venv/
