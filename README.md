@@ -58,12 +58,20 @@ connect, ever. Questions only the warehouse could settle go into the open-questi
 
 ## Install
 
+Clone this repository, then install the dependencies:
+
 ```bash
 python3 -m pip install -r requirements.txt
 ```
 
 Three pure-python packages. Test dependencies are separate (`requirements-dev.txt`) and you do not
 need them to run the kit.
+
+The repo is also registered as an agent skill (`SKILL.md`), so your coding agent can find it by
+intent: `npx skills add GetCassis/ontology-bootstrap` installs it for Claude Code, Cursor, Codex
+and most other agents, and in Claude Code `/plugin marketplace add GetCassis/skills` then
+`/plugin install ontology-bootstrap@cassis` does the same. Either way the run itself happens in a
+clone of this repository, which the skill will make.
 
 ## Run it
 

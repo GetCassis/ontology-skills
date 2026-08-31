@@ -1,0 +1,15 @@
+{
+  "name": "ontology-bootstrap",
+  "displayName": "Ontology bootstrap",
+  "version": "1.0.0",
+  "description": "Assemble a reviewable first version of an analytics agent's context from the dbt project, warehouse schema, dashboards and docs a stack already has. Evidence attached to every claim, unknowns filed as questions, four human checkpoints. Runs fully offline.",
+  "author": {
+    "name": "Cassis",
+    "email": "hello@getcassis.com",
+    "url": "https://getcassis.com"
+  },
+  "homepage": "https://github.com/GetCassis/ontology-bootstrap",
+  "repository": "https://github.com/GetCassis/ontology-bootstrap",
+  "license": "MIT",
+  "keywords": ["ontology", "dbt", "analytics", "context", "ai-agents", "semantic-layer", "documentation"]
+}
