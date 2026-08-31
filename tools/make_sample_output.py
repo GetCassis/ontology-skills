@@ -81,7 +81,11 @@ def main() -> int:
                 listing.append(str(p.relative_to(tree)))
 
         if OUT.exists():
-            shutil.rmtree(OUT)
+            for stale in sorted(OUT.rglob("*"), reverse=True):
+                if stale.is_file():
+                    stale.unlink()
+                else:
+                    stale.rmdir()
         for rel in KEEP:
             dst = OUT / rel
             dst.parent.mkdir(parents=True, exist_ok=True)
