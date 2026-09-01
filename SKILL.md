@@ -30,6 +30,24 @@ cd ontology-bootstrap
 python3 -m pip install -r requirements.txt
 ```
 
+Installing this through a skill or plugin installer copies the files but does not give you a
+runnable kit: the copy is not a working directory, and the dependencies are not installed.
+
+## What it needs, and what it touches
+
+Three pure-Python dependencies: `pyyaml`, `sqlglot`, `ruamel.yaml`. Nothing else, and no build step.
+
+It runs fully offline. No account, no API key, no network call, and no connection to your
+warehouse — it reads a schema export you produce yourself. Where profiling would settle a
+question, the kit writes the SQL for a human to run and files the question; it never runs it.
+
+It writes inside the checkout, in the run directory. The one exception is the optional
+`--emit dbt`, which merges descriptions back into your dbt project's own `schema.yml` files: it
+adds fields and never overwrites a description already there, and it round-trips the YAML so
+your comments and formatting survive. Everything dbt has no field for goes under `meta.cassis.*`.
+
+`python3 tests/test_kit.py` runs on a fresh clone with no warehouse data and no credentials.
+
 ## How to run
 
 Read `CLAUDE.md` in the checkout and follow it exactly. It is the operating contract: the driver
