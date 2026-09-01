@@ -69,9 +69,8 @@ need them to run the kit.
 
 The repo is also registered as an agent skill (`SKILL.md`), so your coding agent can find it by
 intent: `npx skills add GetCassis/ontology-bootstrap` installs it for Claude Code, Cursor, Codex
-and most other agents, and in Claude Code `/plugin marketplace add GetCassis/skills` then
-`/plugin install ontology-bootstrap@cassis` does the same. Either way the run itself happens in a
-clone of this repository, which the skill will make.
+and most other agents. The run itself still happens in a clone of this repository, which the
+skill will make.
 
 ## Run it
 
