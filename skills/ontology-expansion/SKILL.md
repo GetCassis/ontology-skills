@@ -66,10 +66,11 @@ reframe them. Do not silently select one based on table counts or usage alone.
 If the user has already defined it, treat that as the starting decision.
 
 Map the chosen domain to existing concepts, missing coverage, required joins
-and supporting reference tables. Show what is already represented, what would
-be added and where definitions or ownership overlap. Let the user adjust this
-scope before substantial enrichment. Do not treat every unmodeled table as
-required work or impose a fixed table quota.
+and supporting reference tables. Once the scope and context sources are clear,
+draft the supported additions without requiring another scope or domain-tree
+approval. Include what is already represented, what is being added and where
+definitions or ownership overlap in the review. Do not treat every unmodeled
+table as required work or impose a fixed table quota.
 
 ### Review the domain structure, including useful refactors
 
@@ -85,19 +86,21 @@ Separate structural changes from changes in business meaning. Moving or
 renaming a metric must not silently change its formula, filters or unit.
 Offer a smaller additive option when the migration cost is disproportionate.
 
-Present the proposed tree and refactors together for review before dependent
-edits. Reuse decisions already made in the request; do not ask again. If a
-refactor remains undecided, continue additions that do not depend on it.
+Include straightforward extensions of the domain tree in the draft. Present
+refactors that change existing structure or meaning for review before dependent
+edits, unless already authorized. If a refactor remains undecided, continue
+additions that do not depend on it.
 
 ### Keep the review points about their data
 
-As in bootstrap, the meaningful decisions are the scope, domain tree, metrics
-and unresolved questions. Present each as a concise artifact or grouped diff,
-with the decision needed first. Batch related metric definitions and conflicts
-rather than asking column by column. Do not repeat settled decisions, turn
-technical steps into approvals, or invent a business default to move past an
-unanswered question. Changes to previously reviewed meaning return to the
-user with the consequence made explicit.
+Collect ambiguities in the draft or PR review note: the affected concept,
+competing interpretations, supporting evidence and clarification needed. Leave
+the uncertain definition unchanged or omit the unsupported addition while
+drafting the rest. Ask during drafting only when the ambiguity prevents useful
+progress on the chosen scope; otherwise batch questions for review of the
+concrete draft. Do not invent a business default to move past an unanswered
+question. Changes to previously reviewed meaning return to the user with the
+consequence made explicit.
 
 ## Assemble evidence without recreating the ontology
 
@@ -125,8 +128,9 @@ the evidence outside the serialized ontology so validators can still read it.
 Do not silently settle contradictions by replacing a curated definition.
 Describe the competing meanings and their effect on the answer. Where two
 definitions are valid, preserve them with clear names/scopes and ask for a
-default only if one is needed. Ask an owner when the decision changes a number
-and the sources cannot settle it. Continue independent additions while waiting.
+default only if one is needed. Flag a decision for its owner when it changes a
+number and the sources cannot settle it. Defer that definition and continue
+independent additions.
 Keep unsupported metrics out of the governed set; record the missing fact and
 the affected question instead of inventing a formula or denominator.
 
