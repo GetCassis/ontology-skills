@@ -1,4 +1,56 @@
-# Cassis context bootstrap
+# Cassis ontology skills
+
+Skills for building and expanding the context an analytics agent needs. Both start from
+your data assets, attach evidence to definitions, and leave business decisions to you.
+
+## Choose a skill
+
+| Skill | When to use it | Result |
+|---|---|---|
+| [ontology-bootstrap](SKILL.md) | You are creating an initial ontology from schema, dbt, dashboards and docs | A new ontology tree and evidence reports |
+| [ontology-expansion](skills/ontology-expansion/SKILL.md) | You already maintain an ontology, including one synced to Git, and want to cover another business domain | A reviewed expansion/refactor diff, evidence and validation results |
+
+## Install a skill
+
+```bash
+npx skills add GetCassis/ontology-skills --skill ontology-bootstrap --full-depth
+npx skills add GetCassis/ontology-skills --skill ontology-expansion --full-depth
+```
+
+To see both before installing:
+
+```bash
+npx skills add GetCassis/ontology-skills --list --full-depth
+```
+
+`--full-depth` discovers the expansion skill alongside the original root-level bootstrap
+skill. The skill names remain unchanged. This repository was previously named
+`GetCassis/ontology-bootstrap`; existing GitHub links redirect here.
+
+## Expand an existing ontology
+
+Run the expansion skill from your existing ontology repository. Tell the agent which business
+domain you want to cover and point it to the available schema/dbt exports and documentation.
+If you are unsure about the scope, it helps you define it before enrichment.
+
+For example:
+
+> Use ontology-expansion to model partner engagement in our existing Git-synced ontology.
+> Help me define the domain, identify missing context, and propose refactors where the current
+> structure gets in the way. Use our schema and dbt exports; do not connect to the warehouse.
+> Prepare a reviewable diff and check the existing evaluation cases.
+
+The skill starts from your curated definitions and proposes additions or refactors for review.
+It checks how Git changes reach the published ontology, preserves pending work, and distinguishes
+SQL judged without execution from results verified against data. It does not run the bootstrap
+generator over your existing tree. It is an agent workflow, not an automatic merge utility;
+validation uses the tools available in your project. Metadata expansion needs no live warehouse
+connection, but your configured model's data-handling constraints still apply.
+
+The expansion skill is newly published; it has not yet been validated on a real customer
+expansion. The implementation, measurements and detailed instructions below describe **bootstrap**.
+
+# Bootstrap kit
 
 Assemble a reviewable first version of an analytics agent's context from the dbt models,
 warehouse schema, dashboards, query history, and documentation you already have.
@@ -67,10 +119,9 @@ python3 -m pip install -r requirements.txt
 Three pure-python packages. Test dependencies are separate (`requirements-dev.txt`) and you do not
 need them to run the kit.
 
-The repo is also registered as an agent skill (`SKILL.md`), so your coding agent can find it by
-intent: `npx skills add GetCassis/ontology-bootstrap` installs it for Claude Code, Cursor, Codex
-and most other agents. The run itself still happens in a clone of this repository, which the
-skill will make.
+The bootstrap skill is registered in the root `SKILL.md`; install it using the command above.
+The run itself still happens in a clone of this repository, which the skill will make.
+The expansion skill works in your existing ontology checkout instead.
 
 ## Run it
 

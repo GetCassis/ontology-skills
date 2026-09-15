@@ -25,8 +25,8 @@ plugin directory, do not run there. Clone the repository into a working director
 run from the clone:
 
 ```bash
-git clone https://github.com/GetCassis/ontology-bootstrap
-cd ontology-bootstrap
+git clone https://github.com/GetCassis/ontology-skills
+cd ontology-skills
 python3 -m pip install -r requirements.txt
 ```
 

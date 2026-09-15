@@ -1,15 +1,27 @@
 {
   "name": "ontology-bootstrap",
-  "displayName": "Ontology bootstrap",
-  "version": "1.0.0",
-  "description": "Assemble a reviewable first version of an analytics agent's context from the dbt project, warehouse schema, dashboards and docs a stack already has. Evidence attached to every claim, unknowns filed as questions, four human checkpoints. Runs fully offline.",
+  "displayName": "Cassis ontology skills",
+  "version": "1.1.0",
+  "description": "Build an initial analytics ontology or expand an existing Git-synced one. Evidence-backed definitions, user-defined domains, reviewable refactors and validation.",
   "author": {
     "name": "Cassis",
     "email": "hello@getcassis.com",
     "url": "https://getcassis.com"
   },
-  "homepage": "https://github.com/GetCassis/ontology-bootstrap",
-  "repository": "https://github.com/GetCassis/ontology-bootstrap",
+  "homepage": "https://github.com/GetCassis/ontology-skills",
+  "repository": "https://github.com/GetCassis/ontology-skills",
   "license": "MIT",
-  "keywords": ["ontology", "dbt", "analytics", "context", "ai-agents", "semantic-layer", "documentation"]
+  "keywords": [
+    "ontology",
+    "dbt",
+    "analytics",
+    "context",
+    "ai-agents",
+    "semantic-layer",
+    "documentation"
+  ],
+  "skills": [
+    "./",
+    "./skills/ontology-expansion"
+  ]
 }
