@@ -40,6 +40,13 @@ Before editing, establish:
 - The questions or business area to unlock, available evidence and permitted
   data access. Infer these from the request and repository first. Ask only for
   missing information that would materially change the work.
+- Which validation can actually run here, before drafting rather than after.
+  Run each check the repository and the installed CLI offer once, now, on the
+  untouched baseline: the structural check, the formatter, the repository's own
+  test or eval command. Some need a project binding or credentials this
+  checkout does not have, and a plan that leans on an eval suite nobody can run
+  is a plan with no behavioural check in it. Say at the outset which checks are
+  available and what will therefore stay unverified.
 
 An expansion request authorizes preparing the changes, not automatically
 merging or publishing them. Follow any explicit authorization already given.
@@ -63,14 +70,14 @@ questions and boundaries. The domain need not match a current folder, schema or
 list of unmodeled tables. If it is not yet specified, propose a few useful
 candidate domains from the available context and ask the user to choose or
 reframe them. Do not silently select one based on table counts or usage alone.
-If the user has already defined it, treat that as the starting decision.
+If the user has already defined it, treat that as the starting decision. If the
+user cannot be reached, work the best-evidenced candidate and name the ones you
+set aside, with what each would have unlocked, at the top of the review.
 
 Map the chosen domain to existing concepts, missing coverage, required joins
-and supporting reference tables. Once the scope and context sources are clear,
-draft the supported additions without requiring another scope or domain-tree
-approval. Include what is already represented, what is being added and where
-definitions or ownership overlap in the review. Do not treat every unmodeled
-table as required work or impose a fixed table quota.
+and supporting reference tables. Include what is already represented, what is
+being added and where definitions or ownership overlap in the review. Do not
+treat every unmodeled table as required work or impose a fixed table quota.
 
 ### Review the domain structure, including useful refactors
 
@@ -86,10 +93,18 @@ Separate structural changes from changes in business meaning. Moving or
 renaming a metric must not silently change its formula, filters or unit.
 Offer a smaller additive option when the migration cost is disproportionate.
 
-Include straightforward extensions of the domain tree in the draft. Present
-refactors that change existing structure or meaning for review before dependent
-edits, unless already authorized. If a refactor remains undecided, continue
-additions that do not depend on it.
+**Get the structure approved before authoring any content.** Present the
+proposed tree — new domains, splits, moves, and the table that lands in each —
+and wait. Every table and metric names a domain, so content filled into a
+hierarchy the user then changes all has to move. This is the one approval the
+expansion asks for: once the tree is agreed, draft everything the evidence
+supports without stopping for further scope or structure approval, and come
+back with the first version plus what is ambiguous or needs their input.
+
+If the user cannot be reached, draft against the tree you would have proposed,
+say so, and put the tree first in the review note so the reviewer reads the
+structure before the content it determines. If a refactor remains undecided,
+continue the additions that do not depend on it.
 
 ### Keep the review points about their data
 
@@ -128,9 +143,19 @@ the evidence outside the serialized ontology so validators can still read it.
 Do not silently settle contradictions by replacing a curated definition.
 Describe the competing meanings and their effect on the answer. Where two
 definitions are valid, preserve them with clear names/scopes and ask for a
-default only if one is needed. Flag a decision for its owner when it changes a
-number and the sources cannot settle it. Defer that definition and continue
-independent additions.
+default only if one is needed.
+
+**Changing something the team already approved: apply it when the evidence is
+strong, propose it when it is not, flag it either way.** The evidence is strong
+when the expansion makes an existing statement false — a root convention that
+was true of the old coverage and is wrong for the new tables — or when the
+sources settle the disagreement outright. Then make the change, keep it in its
+own commit so it can be read and reverted on its own, and say in the review
+what it was, why, and what moves if the user disagrees. When the sources cannot
+settle it, or when the change is about where a term routes rather than about a
+statement now being false, leave it and propose it. Never let either kind reach
+the user only as a line in a diff, and never bundle it into a commit of
+additions. Defer the unsettled definition and continue independent additions.
 Keep unsupported metrics out of the governed set; record the missing fact and
 the affected question instead of inventing a formula or denominator.
 
@@ -154,9 +179,18 @@ conflicts, rather than re-deriving facts a tool can extract.
   joining. Preserve existing join entries and conditions.
 - Reuse governed metrics where applicable. For new ones, make population,
   mandatory filters, time basis, unit and aggregation level explicit.
+- A calculation the metric format cannot hold still needs a route. When the
+  business asked for a number and the answer is a recipe rather than a metric —
+  two facts on different clocks, a pre-aggregate before a join that fans out —
+  write the recipe where the answering agent reads it, which is the domain's
+  own prose, and add the case to the evaluation suite. Recording it only in the
+  review note leaves the question unanswerable for everyone but the reviewer.
+  Say in the review why it is not a metric.
 - Extend domain guidance and navigation to include the new coverage. Preserve
-  curated prose and regenerate generated navigation with the repository's
-  formatter, if available.
+  curated prose. Generated navigation regions are regenerated by the
+  repository's formatter — `cassis ontology fmt` for a Cassis tree, which also
+  refreshes a domain README's nav region; run it rather than hand-writing those
+  blocks, and note that a stale one fails `cassis ontology check`.
 - Preserve identifiers, locations, permissions-related metadata, tests and
   unrelated fields outside the agreed refactor. For a refactor, track old-to-new
   names/paths and update all affected metric, table, join, domain, navigation
@@ -190,7 +224,8 @@ Where available, `cassis ontology fmt` and `cassis ontology check` provide
 format/structural checks; inspect their changes and report unavailable checks.
 Structural validity does not establish business correctness.
 
-Reuse the existing evaluation suite. Add cases for the new questions and for
+Reuse the existing evaluation suite, within the limits you established at the
+outset. Add cases for the new questions and for
 existing concepts touched by shared rules, joins or metrics. Where feasible,
 compare the baseline and expanded ontology with the same reference cases,
 model/settings and data snapshot. Do not rewrite a reference merely to make a
