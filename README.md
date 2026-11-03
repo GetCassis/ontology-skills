@@ -51,7 +51,7 @@ public analytics project, a model read `is_arpu` as average revenue per user. Th
 docs say Annual Revenue Per User, excluding the Storage tier and the EDU rate plan. Nothing in that kind of output tells
 you which descriptions are like this one.
 
-The kit uses a model too. What changes is what the model is allowed to write:
+The kit uses LLMS too. What changes is what the model is allowed to write:
 
 | | Asking a model directly | This kit |
 |---|---|---|
