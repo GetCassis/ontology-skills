@@ -53,7 +53,7 @@ writes in if you install `cassis-cli`.
 | `QUESTIONS.md` | Every unknown, tiered. The blocking ones make a number wrong until answered; the findings are defects in your own pipeline and nothing for you to answer |
 | `QUESTIONS-REVIEW.md` | The blocking subset, riskiest first — the fourth checkpoint. Where your own documentation answers one of these, the answer is here as a candidate with the page and line it was read from; it applies to nothing until you write it in as an `answer:` line |
 | `docs-packets/` | One packet per blocking question: the passages your documentation corpus offers it, scored and cited, as the agent judging them saw them. `docs_candidates.json` and `docs_answers.yml` are the same thing as data — what was retrieved, and what the agent made of it |
-| `METRICS-REVIEW.md` | Every metric with its provenance and one stamp, riskiest first |
+| `METRICS-REVIEW.md` | Every metric with its provenance and one stamp, riskiest first, then what a semantic layer declared that is not a metric yet |
 | `verify_report.json` | Internal consistency of the tree. Not correctness |
 | `judge_input.json` | Every computation claim paired with the SQL that defines it, for an adjudication pass before anyone trusts a number |
 | `prefill_report.json` | How much of the ontology is your own existing words versus drafted from evidence during the run |

@@ -207,7 +207,8 @@ def canonical_table(key: str, tab: dict, schema: dict, dropped: Counter,
     return out
 
 
-def canonical_metric(name: str, m: dict, tables: dict, dropped: Counter) -> dict:
+def canonical_metric(name: str, m: dict, tables: dict, dropped: Counter,
+                     provenance: dict = None) -> dict:
     out = {"name": name,
            "display_name": m.get("display_name") or display_name_for(name)}
     tkey = f"{m.get('table_schema')}.{m.get('table_name')}"
@@ -228,8 +229,12 @@ def canonical_metric(name: str, m: dict, tables: dict, dropped: Counter) -> dict
     if extra:
         out["description"] = " ".join(x for x in (out.get("description"),
                                                   extra) if x)
+    # where a declared metric came from (the semantic layer, and its DAX when
+    # the kit translated it) is provenance, kept beside the tree, not in it
+    if m.get("declared") and provenance is not None:
+        provenance.setdefault("__metrics__", {})[name] = m["declared"]
     for k in m:
-        if k in ("path", "notes", "caveats"):
+        if k in ("path", "notes", "caveats", "declared"):
             continue
         if k not in CANON_METRIC_KEYS:
             dropped[f"metrics.{k}"] += 1
@@ -356,7 +361,7 @@ def emit_cassis(run: Path, tree: dict, schema: dict, comments: dict = None) -> i
 
     metrics = {}
     for name, m in sorted(tree["metrics"].items()):
-        rec = canonical_metric(name, m, tree["tables"], dropped)
+        rec = canonical_metric(name, m, tree["tables"], dropped, provenance)
         metrics[name] = rec
         p = out_root / "metrics" / f"{name}.yml"
         p.parent.mkdir(parents=True, exist_ok=True)

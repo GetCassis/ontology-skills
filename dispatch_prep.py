@@ -83,7 +83,7 @@ def cmd_resolve_docs(args):
         except yaml.YAMLError:
             continue
         for model in (doc.get("models") or []) + (doc.get("seeds") or []):
-            if model.get("name") != rec["dbt_model"]:
+            if model.get("name") != rec.get("dbt_model"):
                 continue
             desc = resolve(model.get("description"), blocks, missing)
             if desc and not rec.get("description"):
@@ -124,6 +124,12 @@ def cmd_packets(args):
     for r in recs:
         by_table.setdefault(r["table"].upper(), r)
     ev = ws / "evidence"
+    # Row filters a semantic layer's own source applies to a table (a Power
+    # Query SelectRows): a rule on the table's population, not on any metric.
+    populations = {}
+    if (ws / "declared.json").exists():
+        for pop in load_json(ws / "declared.json").get("populations") or []:
+            populations.setdefault(pop["table"], []).append(pop)
     # same bare-vs-qualified key normalization as skeleton.py
     grains, grain_src = {}, {}
     if (ev / "grains.json").exists():
@@ -217,11 +223,20 @@ def cmd_packets(args):
                   f"- file to edit: `cassis/tables/{tname.replace('.', '/')}.yml`",
                   f"- columns: {len(cols)}"]
             if grains.get(tname):
-                L.append(f"- grain (from {grain_src.get(tname, 'dbt tests')}): "
-                         f"{grains[tname]}")
+                src = grain_src.get(tname, "dbt tests")
+                if src == "dbt tests" and rec and rec.get("adapter") == "generic":
+                    src = "the model file"
+                L.append(f"- grain (from {src}): {grains[tname]}")
+            for pop in populations.get(tname, []):
+                L.append(f"- the semantic layer reads only rows where `{pop['rule']}` "
+                         f"({pop.get('source')}, {pop.get('cite')}): say where this "
+                         f"rule holds and what it leaves out, never on a column")
             if tname in nonsummable:
                 L.append("- **non-summable**: stacks aggregation levels; do not sum blindly")
-            if rec and not rec.get("dbt_model"):
+            if rec and rec.get("adapter") == "generic":
+                L.append(f"- model file: `{rec.get('model_file')}` (mapped "
+                         f"layout, not dbt)")
+            elif rec and not rec.get("dbt_model"):
                 L.append("- a warehouse view no repo model defines: its own "
                          "definition below is the defining SQL")
             elif rec:
@@ -245,8 +260,9 @@ def cmd_packets(args):
             t_enums = (enums.get(tname.upper())
                        or enums.get(tname.split(".", 1)[1].upper()) or [])
             if t_enums:
-                L += ["", "**Stored values the project's accepted_values tests "
-                          "declare** (already in the file as `enum_values`):"]
+                L += ["", "**Stored values the project declares** (dbt "
+                          "accepted_values tests, or the mapped layout's own value "
+                          "list; already in the file as `enum_values`):"]
                 for e in t_enums:
                     L.append(f"- `{e.get('column') or '(unnamed)'}`: "
                              f"{json.dumps(e.get('values'), ensure_ascii=False)}")
@@ -413,6 +429,15 @@ def cmd_prefill(args):
     #   repo doc block  >  warehouse comment  >  warehouse-wide glossary  >  draft from evidence
     cc = args.workspace / "column_comments.json"
     comments = load_json(cc) if cc.exists() else {}
+    # A semantic layer's own docs (declared.json, validated at ingest) are the
+    # owner's words about this table, so they rank with the warehouse comment:
+    #   repo doc block > warehouse comment > semantic layer > glossary > draft
+    dp = args.workspace / "declared.json"
+    declared = load_json(dp) if dp.exists() else {}
+    decl_cols = {(c["table"], str(c["column"]).upper()): c["description"]
+                 for c in declared.get("columns") or [] if c.get("description")}
+    decl_tables = {t["table"]: t["description"] for t in declared.get("tables") or []
+                   if t.get("description")}
     filled_cols = filled_tables = kept = skipped_tables = restated = 0
     from_glossary = 0
     from_inferred = 0
@@ -428,7 +453,8 @@ def cmd_prefill(args):
         if not isinstance(rec, dict):
             continue
         changed = False
-        tbl_note = tdesc.get(table) or (comments.get(table) or {}).get("__table__")
+        tbl_note = (tdesc.get(table) or (comments.get(table) or {}).get("__table__")
+                    or decl_tables.get(table))
         if not (rec.get("description") or "").strip() and tbl_note:
             rec["description"] = tbl_note
             filled_tables += 1
@@ -450,6 +476,8 @@ def cmd_prefill(args):
             if not text:
                 text = ((comments.get(table) or {}).get(cname) or "").strip() or None
                 source = "warehouse_comment" if text else None
+            if not text and decl_cols.get((table, cname)):
+                text, source = decl_cols[(table, cname)], "semantic_layer"
             detail = None
             if not text and cname in glossary:
                 g = glossary[cname] or {}

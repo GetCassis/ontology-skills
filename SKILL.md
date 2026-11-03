@@ -55,8 +55,9 @@ sequence (`intake.py` for a new run, then `bootstrap.py prep`, `build`, `finish`
 checkpoints where you stop and wait for the user, the evidence and enrichment rules, and the
 reporting rules. Do not re-derive the sequence from the scripts.
 
-`README.md` says what inputs the kit needs (a schema export and a dbt project or dbt docs export
-are the two mandatory ones, everything else is optional) and what a run costs. Relay each phase's
+`README.md` says what inputs the kit needs (a schema export is mandatory; the repository that
+builds the tables is strongly recommended, as a dbt project, a dbt docs export, or any other layout
+through a mapping config; everything else is optional) and what a run costs. Relay each phase's
 cost banner to the user before the phase spends it.
 
 ## What comes out

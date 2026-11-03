@@ -188,7 +188,65 @@ def main():
                    f"{d.get('on')}: {d.get('reason')}")
     (args.run / "REJECTED_JOINS.md").write_text("\n".join(rej) + "\n")
     print(f"REJECTED_JOINS.md: {len(rejected)} entries")
+    write_declared_metrics(args.run, args.workspace)
     return 0
+
+
+def write_declared_metrics(run: Path, workspace: Path) -> None:
+    """A metric a semantic layer declares is determined by its inputs, so a
+    script writes it, never an agent: one file per declared metric whose table
+    is modelled, carrying where it came from. An existing file is never
+    overwritten, a metric already defined on the same table with the same
+    expression and filter is not duplicated, and nothing from the layer's
+    review list is ever written."""
+    dp = workspace / "declared.json"
+    if not dp.exists():
+        return
+    import re
+    from common import normalize_expr
+    declared = json.loads(dp.read_text())
+    mdir = run / "cassis" / "metrics"
+    mdir.mkdir(parents=True, exist_ok=True)
+    existing = {}
+    for p in sorted(mdir.glob("*.yml")):
+        m = load_yaml(p) or {}
+        existing[(f"{m.get('table_schema')}.{m.get('table_name')}".upper(),
+                  normalize_expr(str(m.get("expression") or "")),
+                  str(m.get("filters") or "").strip())] = p.name
+    wrote = same = outside = 0
+    for m in declared.get("metrics") or []:
+        sch, tbl = m["table"].split(".", 1)
+        if not (run / "cassis" / "tables" / sch / f"{tbl}.yml").exists():
+            outside += 1
+            continue
+        key = (m["table"].upper(), normalize_expr(m["expression"]),
+               str(m.get("filters") or "").strip())
+        if key in existing:
+            same += 1
+            continue
+        slug = re.sub(r"[^a-z0-9]+", "_", m["name"].lower()).strip("_") or "metric"
+        name, n = slug, 2
+        while (mdir / f"{name}.yml").exists():
+            name, n = f"{slug}_{n}", n + 1
+        rec = {"name": name, "display_name": m["name"].split(".")[-1],
+               "table_schema": sch, "table_name": tbl,
+               "expression": m["expression"]}
+        if m.get("filters"):
+            rec["filters"] = m["filters"]
+        if m.get("description"):
+            rec["description"] = m["description"]
+        rec["declared"] = {k: m.get(k) for k in ("source", "name", "cite", "language",
+                                                  "translated", "original_expression")}
+        (mdir / f"{name}.yml").write_text(yaml.safe_dump(rec, sort_keys=False,
+                                                         allow_unicode=True))
+        existing[key] = f"{name}.yml"
+        wrote += 1
+    n_tr = sum(1 for m in declared.get("metrics") or [] if m.get("translated"))
+    print(f"declared metrics: {wrote} written to metrics/"
+          + (f", {same} already defined" if same else "")
+          + (f", {outside} on tables outside the modelled scope" if outside else "")
+          + (f" ({n_tr} translated by the kit: the metrics review marks them to "
+             f"confirm)" if n_tr else ""))
 
 
 if __name__ == "__main__":

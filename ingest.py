@@ -3,14 +3,17 @@
 
 Usage:
   python3 ingest.py --input <bundle-or-repo dir> --schema <csv|json> \
-      --workspace <out dir> [--adapter auto|dbt|dbtdocs|none] \
+      --workspace <out dir> [--adapter auto|dbt|dbtdocs|generic|none] \
+      [--adapter-config FILE] \
       [--questions-dir DIR]... [--dashboards-dir DIR]... [--docs-dir DIR]... \
       [--query-history FILE]
 
 Adapter auto-detection: dbt (dbt_project.yml) -> dbtdocs (a manifest/catalog
-export). When neither matches, exit with the instruction to run the LLM
-config fallback (adapters/llm_config_fallback.md) which emits a mapping config;
-rerun with --adapter generic --adapter-config <file>.
+export) -> generic when --adapter-config is given. Any other layout that keeps
+one file per table (SQLMesh, for one) takes one mapping config:
+write it by hand or with the prompt in adapters/llm_config_fallback.md, then
+rerun with --adapter generic --adapter-config <file>. A warehouse with no
+transformation repo runs with --adapter none.
 """
 import argparse
 import csv
@@ -26,6 +29,8 @@ from common import (die, dump_json, fact_id, is_agent_instructions, load_json,
                     sql_table_refs, write_csv_rows)
 from adapters import dbt as dbt_adapter
 from adapters import dbtdocs as dbtdocs_adapter
+from adapters import generic as generic_adapter
+from adapters import semantic_layer
 
 
 # ---------- schema ----------
@@ -441,6 +446,35 @@ def _pdf_text(path: Path):
 
 # ---------- main ----------
 
+def ingest_declared(paths, schema, dialect, ws):
+    """A semantic layer's metrics, joins and docs, kept only where they hold
+    against the schema export. Rejects and the measures with no single SQL
+    expression are written beside the survivors, never dropped."""
+    merged = {"sources": [], "metrics": [], "joins": [], "columns": [], "tables": [],
+              "review": [], "populations": [], "rejects": []}
+    for path in paths:
+        try:
+            raw = semantic_layer.load(path)
+        except (RuntimeError, ValueError) as e:
+            die(str(e))
+        kept = semantic_layer.validate(raw, schema, dialect)
+        merged["sources"].append(kept["source"])
+        for k in merged:
+            if k != "sources":
+                merged[k] += [{**x, "source": kept["source"]} for x in kept.get(k) or []]
+        n_tr = sum(1 for m in kept["metrics"] if m.get("translated"))
+        print(f"declared ({kept['source']}): {len(kept['metrics'])} metrics"
+              + (f" ({n_tr} translated from DAX, to confirm)" if n_tr else "")
+              + f", {len(kept['joins'])} joins, {len(kept['columns'])} column docs | "
+              f"{len(kept['review'])} to review (no single SQL expression), "
+              f"{len(kept['rejects'])} rejected")
+        for r in kept["rejects"][:8]:
+            print(f"  rejected {r['kind']} {r['name']}: {r['reason']}")
+        if len(kept["rejects"]) > 8:
+            print(f"  ... {len(kept['rejects']) - 8} more in declared.json")
+    dump_json(merged, ws / "declared.json")
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--input", type=Path, required=True,
@@ -448,7 +482,10 @@ def main():
     ap.add_argument("--schema", type=Path, required=True)
     ap.add_argument("--workspace", type=Path, required=True)
     ap.add_argument("--adapter", default="auto",
-                    choices=["auto", "dbt", "dbtdocs", "none"])
+                    choices=["auto", "dbt", "dbtdocs", "generic", "none"])
+    ap.add_argument("--adapter-config", type=Path,
+                    help="mapping config for --adapter generic: where each table's "
+                         "file, name, SQL and docs sit (adapters/generic.py)")
     ap.add_argument("--questions-dir", type=Path, action="append", default=[])
     ap.add_argument("--dashboards-dir", type=Path, action="append", default=[])
     ap.add_argument("--docs-dir", type=Path, action="append", default=[])
@@ -460,6 +497,12 @@ def main():
                     help="markdown column glossary (`**column**: description`), keyed "
                          "by COLUMN NAME across the whole warehouse rather than by model")
     ap.add_argument("--query-history", type=Path)
+    ap.add_argument("--declared", type=Path, action="append", default=[],
+                    help="a semantic layer's own definitions: a Power BI model saved "
+                         "as TMDL, a dbt MetricFlow project, a Cube YAML data model, a "
+                         "LookML project, or a declared-definitions file "
+                         "(adapters/semantic_layer.md). "
+                         "Repeatable")
     args = ap.parse_args()
 
     ws = args.workspace
@@ -496,10 +539,14 @@ def main():
             adapter = "dbt"
         elif dbtdocs_adapter.detect(args.input):
             adapter = "dbtdocs"
+        elif args.adapter_config:
+            adapter = "generic"
         else:
-            die("no adapter matched. Run the LLM config fallback "
-                "(adapters/llm_config_fallback.md) to generate a mapping, "
-                "or pass --adapter explicitly.")
+            die("no adapter matched: --input is neither a dbt project nor a dbt "
+                "docs export. For another layout, write a mapping config (by "
+                "hand, or with the prompt in adapters/llm_config_fallback.md) "
+                "and rerun with --adapter generic --adapter-config <file>. With "
+                "no transformation repo at all, rerun with --adapter none.")
 
     extra = {}
     if adapter == "dbt":
@@ -516,12 +563,34 @@ def main():
         extra.pop("raw_inventory", None)
     elif adapter == "dbtdocs":
         records = dbtdocs_adapter.parse(args.input)
+    elif adapter == "generic":
+        if not args.adapter_config:
+            die("--adapter generic needs --adapter-config <file>: the mapping "
+                "that says where each table's name, SQL and docs sit "
+                "(adapters/generic.py documents it).")
+        try:
+            cfg = generic_adapter.load_config(args.adapter_config)
+            if cfg.get("no_stable_mapping"):
+                die(f"{args.adapter_config} records no stable per-table mapping "
+                    f"({cfg.get('why') or 'no reason given'}). Rerun with "
+                    f"--adapter none: the run then builds on the schema export, "
+                    f"docs, dashboards and query history, with no defining SQL, "
+                    f"so grain, join and unit evidence come only from those.")
+            records, report = generic_adapter.parse(args.input, cfg)
+        except RuntimeError as e:
+            die(str(e))
+        print(f"generic adapter: {report['files']} files, {len(records)} tables "
+              f"mapped, {sum(1 for r in records if r['sql'])} with SQL")
+        if report["unnamed"]:
+            print(f"WARN: {len(report['unnamed'])} file(s) gave no table name "
+                  f"and were skipped, e.g. {report['unnamed'][:3]}")
+        for table, kept, dropped in report["duplicates"][:5]:
+            print(f"WARN: {table} is named by both {kept} and {dropped}; "
+                  f"kept the first")
     elif adapter == "none":
         records = []
     else:
-        die(f"unknown adapter {adapter!r}. Run the LLM config fallback "
-            f"(adapters/llm_config_fallback.md) for an unrecognized layout — "
-            f"an adapter nobody implements would read zero tables and say nothing.")
+        die(f"unknown adapter {adapter!r}")
     # Repos name models (mrt_sales__orders), warehouses name tables
     # (SALES_ORDERS). Unless the two are joined here, every downstream
     # linker silently drops the record — one warehouse read 35 of 427 tables
@@ -641,6 +710,9 @@ def main():
         total = sum(len(c) for c in schema.values())
         print(f"column glossary: {len(glos)} definitions | covers {covered}/{total} "
               f"schema columns ({100 * covered // max(total, 1)}%)")
+
+    if args.declared:
+        ingest_declared(args.declared, schema, extra.get("dialect"), ws)
 
     print(f"workspace ready: {ws}")
 

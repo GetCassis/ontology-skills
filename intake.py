@@ -52,11 +52,14 @@ documentation — point the kit at what you already have, in any shape.
    (information-schema export, schema.json, or the .schema.json that
    `cassis schema pull` writes for a warehouse already connected to
    Cassis). Mandatory.                                          --schema
-2. Transformation repo — the dbt project (or equivalent), or a docs export
-   of it. Mandatory: without defining SQL there is no grain, no join
-   evidence, no unit claim.                        --input, --adapter
-   (adapters: dbt = a real dbt project, dbtdocs = a dbt docs export;
-    anything else = LLM-config fallback)
+2. Transformation repo — the dbt project, a docs export of it, or another
+   layout that keeps one file per table, such as SQLMesh.
+   Strongly recommended: defining SQL is where grain, join and unit
+   evidence come from.         --input, --adapter, --adapter-config
+   (adapters: dbt = a real dbt project, dbtdocs = a dbt docs export,
+    generic = any other layout, with a mapping config written by hand or
+    with adapters/llm_config_fallback.md; none = no repo at all, and the
+    run builds on the schema, docs, dashboards and query history alone)
 3. Existing documentation, ANY shape — wiki or Notion export, reference
    docs, a column glossary, model pages. Paths, or "we have none".
                  --docs-dir / --context-dir / --glossary-dir (repeatable),
@@ -65,6 +68,10 @@ documentation — point the kit at what you already have, in any shape.
    Paths, or "we have none". This is join evidence, usage ranking and
    metric corroboration at once.       --dashboards-dir / --questions-dir,
                  or --absent bi_corpus
+   And any semantic layer that already declares metrics and joins: a
+   Power BI model saved as TMDL (a PBIP project's definition folder),
+   dbt MetricFlow YAML, a Cube YAML data model, or a LookML project.
+   Optional.                                       --declared (repeatable)
 5. Query history — a log of real queries, if exportable. Optional.
                  --questions-dir, or --absent query_history
 6. Can you run SQL against the warehouse right now, yourself? yes/no.
@@ -113,7 +120,7 @@ warehouse_access: {warehouse_access}
 profile: {profile}
 {absent_block}{questions_block}
 input: {input}
-{adapter_line}schema: {schema}
+{adapter_line}{adapter_config_line}schema: {schema}
 
 workspace: {workspace}
 run: {run}
@@ -149,7 +156,8 @@ def cmd_write(args):
                           ("--docs-dir", args.docs_dir),
                           ("--context-dir", args.context_dir),
                           ("--dashboards-dir", args.dashboards_dir),
-                          ("--questions-dir", args.questions_dir)):
+                          ("--questions-dir", args.questions_dir),
+                          ("--declared", args.declared)):
         for v in values:
             if not Path(expand(v)).exists():
                 errors.append(f"{label} {v!r} does not exist (expanded: {expand(v)!r})")
@@ -169,6 +177,9 @@ def cmd_write(args):
                       "or state --absent bi_corpus explicitly")
     # Writing back into a project needs the project. A dbt docs export is a
     # snapshot of one, with no schema.yml files to merge into.
+    if (args.adapter or "").lower() == "generic" and not args.adapter_config:
+        errors.append("--adapter generic needs --adapter-config: the mapping that "
+                      "says where each table's name, SQL and docs sit")
     if args.emit in ("dbt", "both") and (args.adapter or "").lower() != "dbt":
         errors.append(f"--emit {args.emit} merges the result back into the dbt "
                       f"project's own schema.yml files, so it needs "
@@ -217,6 +228,8 @@ def cmd_write(args):
                    args.dashboards_dir),
         _dir_block("saved questions / query history", "questions_dirs",
                    args.questions_dir),
+        _dir_block("semantic layer: TMDL, MetricFlow, or a declared file", "declared",
+                   args.declared),
     ]))
 
     # The tree is always written — the dbt export is a projection of it — so
@@ -238,6 +251,8 @@ def cmd_write(args):
         questions_block=questions_block,
         input=args.input,
         adapter_line=f"adapter: {args.adapter}\n" if args.adapter else "",
+        adapter_config_line=(f"adapter_config: {args.adapter_config}\n"
+                             if args.adapter_config else ""),
         schema=args.schema,
         workspace=args.workspace or f"{args.name}-run/workspace",
         run=args.run or f"{args.name}-run",
@@ -261,7 +276,9 @@ def main():
                         "run directory")
     w.add_argument("--schema", required=True)
     w.add_argument("--input", required=True)
-    w.add_argument("--adapter", help="dbt | dbtdocs (else: LLM-config fallback)")
+    w.add_argument("--adapter", help="dbt | dbtdocs | generic | none")
+    w.add_argument("--adapter-config",
+                   help="mapping config for --adapter generic (adapters/generic.py)")
     w.add_argument("--warehouse-access", required=True, choices=("yes", "no"))
     # `demo` resolves as an alias for `sample`, because a config is a recorded
     # fact and should keep working whichever spelling it carries.
@@ -269,7 +286,7 @@ def main():
                    choices=("full", "sample", "demo"),
                    help="run size; `demo` is an alias for `sample`")
     for flag in ("--glossary-dir", "--docs-dir", "--context-dir",
-                 "--dashboards-dir", "--questions-dir"):
+                 "--dashboards-dir", "--questions-dir", "--declared"):
         w.add_argument(flag, action="append", default=[])
     w.add_argument("--emit", default="tree", choices=("tree", "dbt", "both"),
                    help="where the result lands: the standalone ontology tree "

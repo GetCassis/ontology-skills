@@ -18,6 +18,16 @@ Everything in it is a CANDIDATE with provenance, not a truth.
   query them — spend description depth accordingly. `usage_out_of_scope.json` lists tables
   users query that are NOT in scope: name them in QUESTIONS.md where they block a metric.
   `nonsummable.json` lists tables that stack aggregation levels.
+  `workspace/declared.json` holds what a semantic layer declares (a Power BI TMDL model,
+  MetricFlow YAML, a Cube YAML model, LookML; `adapters/semantic_layer.md`), already held against the
+  schema export.
+  Each declared metric is in `metric_candidates.json` and counts as one corroboration source.
+  `apply_synthesis.py` writes each one whose table is modelled as a metric file, with a
+  `declared` block saying where it came from. It never overwrites a file and skips one already
+  defined with the same expression and filter. Do not rewrite these files: name, synonyms and
+  caveats are yours to add. One marked `translated` was turned from DAX into SQL by the kit,
+  and the metrics checkpoint asks a person to confirm it. The `review` list holds measures
+  with no one-table SQL expression. Never force one into a metric file.
 
 - **Computation claims need the defining SQL, per column.** Before writing any claim about HOW
   a value is computed (week convention, timezone, scale, business-time, per-session vs
@@ -181,11 +191,16 @@ and mandatory join-candidate disposition all still apply; verify.py gates every 
 What the run needs, what runs alone, and where a human is genuinely needed. Every
 number below is measured on the three benchmark fixtures (A, B and C), not estimated.
 
-**Mandatory inputs — two.** A schema export of the tables in scope (it defines the
-universe and makes invented column names structurally impossible), and the
-transformation repo (the only source of computation truth: without defining SQL
-there is no grain, no join evidence, no unit claim — you get a glossary, not an
-ontology).
+**Mandatory input — one, and one that is nearly so.** A schema export of the
+tables in scope (it defines the universe and makes invented column names
+structurally impossible). Then the transformation repo, in whatever layout it
+has: dbt and dbt docs exports are read directly, any other layout that keeps
+one file per table (checked on SQLMesh) through one mapping config
+that `--adapter generic` applies to every file (`adapters/generic.py`). It is
+the only source of computation truth: without defining SQL, grain comes only
+from declared keys, joins only from declared keys and shared names, and there is
+no unit claim. A run with `--adapter none` gets structure and a list of
+questions, not meaning.
 
 **Recommended, and where the value actually is — point the kit at it and it finds it.**
 Existing documentation in ANY shape, wherever it lives. This was the largest lever
@@ -206,7 +221,7 @@ SHAPE, because shape is what needs a parser and the transport is whatever the
 export happens to be.
 
 **Step 0 — intake (`intake.py`, once per run, and the answers bind).** Eight
-questions, relayed in one message: the mandatory two, documentation and BI
+questions, relayed in one message: the schema and the repo, documentation and BI
 paths (or an explicit "we have none" — `--absent` — so a missing family and an
 unread family never look the same again), whether the user can run SQL
 against the warehouse, and how much one pass covers (`full` increment vs `sample`

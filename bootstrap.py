@@ -71,19 +71,20 @@ def resolve_config(path):
 
 def load_cfg(path):
     cfg = yaml.safe_load(resolve_config(path).read_text()) or {}
-    for k in ("input", "schema", "workspace", "run", "scope_file", "gold", "scope"):
+    for k in ("input", "schema", "workspace", "run", "scope_file", "gold", "scope",
+              "adapter_config"):
         if cfg.get(k):
             cfg[k] = expand(cfg[k])
     for k in ("glossary_dirs", "context_dirs", "docs_dirs", "dashboards_dirs",
-              "questions_dirs"):
+              "questions_dirs", "declared"):
         cfg[k] = [expand(x) for x in (cfg.get(k) or [])]
     return cfg
 
 
-# What a phase costs, printed before it starts. Measured, not projected: the
-# sample profile is one 10-table run with stage C skipped; the full increment is
-# the range across the paid runs. No enforcement — the point is that nobody
-# starts a phase without knowing what it spends, since it is your money.
+# What a phase costs, printed before it starts. The sample is a 10-table run on
+# GitLab's public analytics project on Claude Sonnet 5.5; the full increment is
+# that run scaled to 20-30 tables with a Claude Opus 5.5 driver. No enforcement:
+# the point is that nobody starts a phase without knowing what it spends.
 PHASE_COST = {
     "prep": {
         "*": ("no model tokens — every step is a script",
@@ -91,11 +92,12 @@ PHASE_COST = {
     },
     "build": {
         # the deterministic prep here is free; the enrichment stages are the run
-        "sample": ("~0.6M written tokens, all Sonnet-tier, with the per-column "
-                   "per-column enrichment skipped", "~40 min"),
-        "full": ("~1.6M written tokens — the driving model plus ~20 Sonnet "
-                 "subagents; on the API, re-read context roughly doubles "
-                 "the bill beyond what is written", "1-2 h"),
+        "sample": ("~0.12M written tokens: Claude Sonnet 5.5 as the driver and "
+                   "~5 enrichment subagents; about $4 at list API prices",
+                   "~6 min of agent time"),
+        "full": ("~0.2-0.3M written tokens: a Claude Opus 5.5 driver plus ~20 "
+                 "Claude Sonnet 5.5 subagents; about $9-13 at list API prices",
+                 "~15 min of agent time"),
     },
     "finish": {
         "*": ("no model tokens for the scripts, plus the judge pass over "
@@ -153,11 +155,14 @@ def cmd_prep(args):
            "--workspace", c["workspace"]]
     if c.get("adapter"):
         ing += ["--adapter", c["adapter"]]
+    if c.get("adapter_config"):
+        ing += ["--adapter-config", c["adapter_config"]]
     for k, flag in (("glossary_dirs", "--glossary-dir"),
                     ("context_dirs", "--context-dir"),
                     ("docs_dirs", "--docs-dir"),
                     ("dashboards_dirs", "--dashboards-dir"),
-                    ("questions_dirs", "--questions-dir")):
+                    ("questions_dirs", "--questions-dir"),
+                    ("declared", "--declared")):
         for d in c.get(k) or []:
             ing += [flag, d]
     run("ingest.py", *ing)

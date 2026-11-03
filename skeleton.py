@@ -142,6 +142,8 @@ def main():
                 "on": c.get("on") or [],
                 "provenance": c.get("provenance"),
                 "occurrences": c.get("occurrences"),
+                **({"relationship": c["relationship"]} if c.get("relationship")
+                   else {}),
                 "disposition": disp,
             })
     (args.run / "joins_draft.yml").write_text(

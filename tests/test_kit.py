@@ -1335,6 +1335,614 @@ def kit_only_tests():
              finds[0]["unbound_count"] == 1 and joined[0]["unbound_count"] == 0,
              str(joined)[:300])
 
+        # --- a layout that is not dbt maps through one config ---
+        # ingest pointed every other layout at a prompt whose output nothing
+        # read: `--adapter generic` did not exist. The configs under test are
+        # the ones the prompt's own examples print, so the doc cannot drift
+        # from the parser.
+        import re as _re
+        from adapters import generic as _generic
+        doc_md = (KIT / "adapters" / "llm_config_fallback.md").read_text()
+        sqlmesh_cfg = json.loads(_re.findall(
+            r"```json\n(.*?)\n```", doc_md.split("## Examples", 1)[1], _re.S)[0])
+        # the YAML-side grammar, on a layout of our own: no public repo of this
+        # shape was checked, so the docs carry no example of it
+        yaml_cfg = {"table_files": "tables/*/*.yml", "table_name_from": "field:name",
+                    "schema_name_from": "parent_dir", "sql_sibling": "file:{stem}.sql",
+                    "fields": {"description": "field:description",
+                               "granularity": "field:primary_key",
+                               "columns": {"list": "field:columns", "name": "name",
+                                           "description": "description",
+                                           "enum_values": "accepted_values"}}}
+        # SQLMesh, in the syntax of its public sushi example
+        sm = tmp / "sqlmesh"
+        (sm / "models").mkdir(parents=True)
+        (sm / "models" / "customers.sql").write_text(
+            "MODEL (\n  name sushi.customers,\n  kind FULL,\n  tags (pii, fact),\n"
+            "  grain customer_id,\n  description 'Sushi customer data',\n"
+            "  column_descriptions (\n"
+            "    customer_id = 'customer_id uniquely identifies customers'\n"
+            "  )\n);\n\nSELECT DISTINCT o.customer_id::INT AS customer_id\n"
+            "FROM sushi.orders AS o\n")
+        (sm / "models" / "revenue_by_day.sql").write_text(
+            "/* Table of revenue\n   from customers by day. */\nMODEL (\n"
+            "  name sushi.customer_revenue_by_day,\n"
+            "  kind incremental_by_time_range (\n    time_column event_date,\n"
+            "    batch_size 10,\n  ),\n  grain (customer_id, event_date),\n);\n\n"
+            "SELECT o.customer_id, SUM(oi.quantity) AS revenue, o.event_date\n"
+            "FROM sushi.orders AS o JOIN sushi.order_items AS oi ON o.id = oi.order_id\n"
+            "GROUP BY 1, 3\n")
+        (sm / "models" / "blueprint.sql").write_text(
+            "MODEL (\n  name @name,\n  kind FULL\n);\nSELECT 1 AS a\n")
+        recs, rep = _generic.parse(sm, sqlmesh_cfg)
+        by = {r["table"]: r for r in recs}
+        cust, rev = by.get("SUSHI.CUSTOMERS", {}), by.get(
+            "SUSHI.CUSTOMER_REVENUE_BY_DAY", {})
+        case("a SQLMesh model maps by its MODEL header: name, grain, description, "
+             "column docs",
+             set(by) == {"SUSHI.CUSTOMERS", "SUSHI.CUSTOMER_REVENUE_BY_DAY"}
+             and cust.get("granularity") == ["CUSTOMER_ID"]
+             and cust.get("description") == "Sushi customer data"
+             and cust.get("column_descriptions") == {
+                 "CUSTOMER_ID": "customer_id uniquely identifies customers"}
+             and rev.get("granularity") == ["CUSTOMER_ID", "EVENT_DATE"]
+             and rev.get("description") == "Table of revenue from customers by day.",
+             str({k: (v["granularity"], v["description"]) for k, v in by.items()}))
+        case("its SQL is the query, with the MODEL header stripped",
+             recs and all(r["sql"].upper().startswith("SELECT")
+                          and "MODEL" not in r["sql"] for r in recs),
+             str([r["sql"][:30] for r in recs]))
+        case("a model named through a macro is reported, not guessed",
+             rep["unnamed"] == ["models/blueprint.sql"], str(rep))
+
+        # one YAML per table, its SQL beside it
+        ym = tmp / "yamlsql"
+        sales = ym / "tables" / "sales"
+        sales.mkdir(parents=True)
+        (sales / "orders.yml").write_text(_yaml.safe_dump({
+            "name": "orders", "description": "Orders placed in the store.",
+            "primary_key": ["order_id"],
+            "columns": [{"name": "order_id", "description": "Order id."},
+                        {"name": "status", "description": "Lifecycle status.",
+                         "accepted_values": ["completed", "cancelled"]},
+                        {"name": "is_test", "accepted_values": [True, False]}]}))
+        (sales / "orders.sql").write_text(
+            "select o.order_id, o.status from raw.orders o "
+            "join sales.customers c on o.customer_id = c.customer_id")
+        (sales / "customers.yml").write_text(_yaml.safe_dump(
+            {"name": "customers", "primary_key": "customer_id"}))
+        (sales / "orders_v2.yml").write_text(_yaml.safe_dump({"name": "orders"}))
+        (sales / "notes.yml").write_text(_yaml.safe_dump({"owner": "data"}))
+        recs, rep = _generic.parse(ym, yaml_cfg)
+        by = {r["table"]: r for r in recs}
+        o = by.get("SALES.ORDERS", {})
+        case("a SQL-plus-YAML layout maps each table with the SQL beside it",
+             set(by) == {"SALES.ORDERS", "SALES.CUSTOMERS"}
+             and "join sales.customers" in o.get("sql", "")
+             and o.get("granularity") == ["ORDER_ID"]
+             and o.get("column_descriptions", {}).get("STATUS") == "Lifecycle status."
+             and o.get("enums") == {"STATUS": ["completed", "cancelled"]}
+             and by["SALES.CUSTOMERS"]["granularity"] == ["CUSTOMER_ID"]
+             and by["SALES.CUSTOMERS"]["sql"] == "", str(by)[:300])
+        case("a file naming a table twice, or none, is reported rather than merged",
+             rep["unnamed"] == ["tables/sales/notes.yml"]
+             and [d[2] for d in rep["duplicates"]] == ["tables/sales/orders_v2.yml"],
+             str(rep))
+
+        gschema = tmp / "gschema.csv"
+        gschema.write_text("TABLE_SCHEMA,TABLE_NAME,COLUMN_NAME,DATA_TYPE\n"
+                           "SALES,ORDERS,ORDER_ID,TEXT\nSALES,ORDERS,STATUS,TEXT\n"
+                           "SALES,CUSTOMERS,CUSTOMER_ID,TEXT\n")
+        gcfg = tmp / "yaml-mapping.json"
+        gcfg.write_text(json.dumps(yaml_cfg))
+        ingest_g = [sys.executable, str(KIT / "ingest.py"), "--input", str(ym),
+                    "--schema", str(gschema)]
+        r = subprocess.run(ingest_g + ["--workspace", str(tmp / "gws"),
+                                       "--adapter-config", str(gcfg)],
+                           capture_output=True, text=True)
+        grecs = (json.loads((tmp / "gws" / "repo" / "tables.json").read_text())
+                 ["records"] if r.returncode == 0 else [])
+        case("ingest takes the mapped layout when given its config, and says what "
+             "it read and what it skipped",
+             r.returncode == 0
+             and "generic adapter: 4 files, 2 tables mapped, 1 with SQL" in r.stdout
+             and "notes.yml" in r.stdout and "orders_v2.yml" in r.stdout
+             and {x["table"] for x in grecs} == {"SALES.ORDERS", "SALES.CUSTOMERS"},
+             (r.stdout + r.stderr)[-400:])
+        nsm = tmp / "no-mapping.json"
+        nsm.write_text(json.dumps({"no_stable_mapping": True,
+                                   "why": "one SQL file builds every table"}))
+        r = subprocess.run(ingest_g + ["--workspace", str(tmp / "gws2"),
+                                       "--adapter", "generic",
+                                       "--adapter-config", str(nsm)],
+                           capture_output=True, text=True)
+        r2 = subprocess.run(ingest_g + ["--workspace", str(tmp / "gws3"),
+                                        "--adapter", "generic"],
+                            capture_output=True, text=True)
+        (tmp / "no-layout").mkdir()
+        r3 = subprocess.run([sys.executable, str(KIT / "ingest.py"),
+                             "--input", str(tmp / "no-layout"), "--schema",
+                             str(gschema), "--workspace", str(tmp / "gws4")],
+                            capture_output=True, text=True)
+        case("a layout with no per-table mapping is sent to --adapter none, with "
+             "what that costs said",
+             r.returncode != 0 and "--adapter none" in r.stderr
+             and "one SQL file builds every table" in r.stderr
+             and "no defining SQL" in r.stderr, r.stderr[-300:])
+        case("--adapter generic without a config says what is missing",
+             r2.returncode != 0 and "--adapter-config" in r2.stderr, r2.stderr[-200:])
+        case("an unrecognized layout is pointed at a mapping config and at "
+             "--adapter none, never at a dead end",
+             r3.returncode != 0
+             and "--adapter generic --adapter-config" in r3.stderr
+             and "--adapter none" in r3.stderr, r3.stderr[-300:])
+
+        gint = tmp / "gen.yml"
+        argv = [sys.executable, str(KIT / "intake.py"), "write", "--name", "gen",
+                "--schema", str(gschema), "--input", str(ym),
+                "--adapter", "generic", "--adapter-config", str(gcfg),
+                "--warehouse-access", "no", "--profile", "sample",
+                "--docs-dir", str(tmp / "docs"), "--absent", "bi_corpus",
+                "--absent", "query_history", "--out", str(gint)]
+        r = subprocess.run(argv, capture_output=True, text=True)
+        gc = _yaml.safe_load(gint.read_text()) if gint.exists() else {}
+        r2 = subprocess.run(argv[:argv.index("--adapter-config")]
+                            + argv[argv.index("--adapter-config") + 2:] + ["--force"],
+                            capture_output=True, text=True)
+        case("intake records the mapping config, refuses generic without one, and "
+             "the driver hands it to ingest",
+             r.returncode == 0 and gc.get("adapter") == "generic"
+             and gc.get("adapter_config") == str(gcfg)
+             and r2.returncode != 0 and "--adapter-config" in r2.stderr
+             and bootstrap.load_cfg(gint).get("adapter_config") == str(gcfg),
+             (str(gc)[:200] + r.stderr[-200:] + r2.stderr[-200:]))
+
+        # --- a semantic layer's own definitions, held against the schema ---
+        # A Power BI table is whatever its Power Query source returns, so it
+        # maps to the warehouse only through that source; DAX the kit
+        # translates is the kit's SQL and has to be confirmed; what has no
+        # single one-table expression is listed, never forced into a metric.
+        from adapters import semantic_layer as _sl
+        pbi = tmp / "Shop.SemanticModel" / "definition"
+        (pbi / "tables").mkdir(parents=True)
+
+        def nav(table):
+            return ("\t\tsource =\n\t\t\t\tlet\n"
+                    '\t\t\t\t    Source = Snowflake.Databases("acct", "WH"),\n'
+                    '\t\t\t\t    Db = Source{[Name="SHOPDB",Kind="Database"]}[Data],\n'
+                    '\t\t\t\t    Sch = Db{[Name="SHOP",Kind="Schema"]}[Data],\n'
+                    f'\t\t\t\t    T = Sch{{[Name="{table}",Kind="Table"]}}[Data],\n')
+        (pbi / "tables" / "orders.tmdl").write_text(
+            "/// Orders placed in the store.\ntable orders\n\n"
+            "\tmeasure 'Total Amount' = SUM(orders[amount])\n\t\tformatString: 0\n\n"
+            "\tmeasure 'Completed Amount' = CALCULATE([Total Amount], "
+            "orders[status] = \"completed\")\n\n"
+            "\tmeasure 'Amount per Order' = DIVIDE([Total Amount], COUNTROWS(orders))\n\n"
+            "\tmeasure Net = SUMX(orders, orders[amount] - orders[discount])\n\n"
+            "\tmeasure 'EU Amount' = CALCULATE([Total Amount], customers[region] = \"EU\")\n\n"
+            "\tmeasure 'Amount (LY)' =\n\t\t\tVAR x = 1\n"
+            "\t\t\tRETURN CALCULATE([Total Amount], SAMEPERIODLASTYEAR('Calendar'[Date]))\n"
+            "\t\tformatString: 0\n\n"
+            "\t/// Order status as recorded at checkout\n"
+            "\tcolumn status\n\t\tdataType: string\n\t\tsourceColumn: status\n\n"
+            "\tcolumn amount\n\t\tdataType: decimal\n\t\tsourceColumn: amount_eur\n\n"
+            "\tcolumn discount\n\t\tdataType: decimal\n\t\tsourceColumn: discount\n\n"
+            "\tcolumn customer_id\n\t\tdataType: int64\n\t\tsourceColumn: customer_id\n\n"
+            "\tcolumn 'Amount Bucket' = IF(orders[amount] > 100, \"big\", \"small\")\n"
+            "\t\tdataType: string\n\n"
+            "\tpartition orders = m\n\t\tmode: import\n" + nav("ORDERS")
+            + '\t\t\t\t    #"Renamed" = Table.RenameColumns(T,{{"AMOUNT_EUR", "amount_eur"}}),\n'
+            '\t\t\t\t    #"Filtered Rows" = Table.SelectRows(#"Renamed", each [status] <> "test")\n'
+            '\t\t\t\tin\n\t\t\t\t    #"Filtered Rows"\n')
+        (pbi / "tables" / "customers.tmdl").write_text(
+            "table customers\n\n\tcolumn customer_id\n\t\tsourceColumn: customer_id\n\n"
+            "\tcolumn region\n\t\tsourceColumn: region\n\n"
+            "\tpartition customers = m\n\t\tmode: import\n" + nav("CUSTOMERS")
+            + "\t\t\t\tin\n\t\t\t\t    T\n")
+        (pbi / "tables" / "targets.tmdl").write_text(
+            "table targets\n\n\tmeasure Target = SUM(targets[value])\n\n"
+            "\tcolumn value\n\t\tsourceColumn: value\n\n"
+            "\tpartition targets = m\n\t\tmode: import\n\t\tsource =\n\t\t\t\tlet\n"
+            '\t\t\t\t    Source = Csv.Document(Web.Contents("https://example.com/t.csv"))\n'
+            "\t\t\t\tin\n\t\t\t\t    Source\n")
+        (pbi / "relationships.tmdl").write_text(
+            "relationship r1\n\tfromColumn: orders.customer_id\n"
+            "\ttoColumn: customers.customer_id\n\n"
+            "relationship r2\n\tfromColumn: orders.status\n\ttoColumn: targets.value\n")
+        pschema = {"SHOP.ORDERS": {"STATUS": "TEXT", "AMOUNT_EUR": "NUMBER",
+                                   "DISCOUNT": "NUMBER", "CUSTOMER_ID": "NUMBER"},
+                   "SHOP.CUSTOMERS": {"CUSTOMER_ID": "NUMBER", "REGION": "TEXT"}}
+        d = _sl.validate(_sl.load(pbi), pschema)
+        ms = {m["name"]: m for m in d["metrics"]}
+        case("a TMDL table maps to its warehouse table through its Power Query "
+             "source, renamed columns included",
+             ms.get("Total Amount", {}).get("table") == "SHOP.ORDERS"
+             and ms["Total Amount"]["expression"] == "SUM(AMOUNT_EUR)"
+             and ms["Total Amount"]["translated"] is True
+             and ms["Total Amount"]["original_expression"] == "SUM(orders[amount])",
+             str(d["metrics"])[:300])
+        case("DAX the kit translates: a same-table CALCULATE filter, DIVIDE, SUMX",
+             ms.get("Completed Amount", {}).get("filters") == "status = 'completed'"
+             and ms.get("Amount per Order", {}).get("expression")
+             == "SUM(AMOUNT_EUR) / NULLIF(COUNT(*), 0)"
+             and ms.get("Net", {}).get("expression") == "SUM((AMOUNT_EUR - discount))",
+             str({k: (v["expression"], v["filters"]) for k, v in ms.items()}))
+        rv = {r["name"]: r["reason"] for r in d["review"]}
+        case("a filter through a related table and time intelligence go to review "
+             "with their DAX, not into a metric",
+             "related table (customers)" in rv.get("EU Amount", "")
+             and "SAMEPERIODLASTYEAR" in rv.get("Amount (LY)", "")
+             and "EU Amount" not in ms and "Amount (LY)" not in ms, str(rv))
+        rj = {(r["kind"], r["name"]): r["reason"] for r in d["rejects"]}
+        case("a measure, a relationship and a table over a file source are rejected "
+             "with the reason",
+             "file or a web address" in rj.get(("metric", "Target"), "")
+             and any(k[0] == "join" and "targets" in v for k, v in rj.items())
+             and ("table", "targets") in rj, str(rj)[:300])
+        case("relationships become joins, docs are kept, the M row filter is a "
+             "population rule",
+             d["joins"] == [{"left": "SHOP.ORDERS", "right": "SHOP.CUSTOMERS",
+                             "on": ["customer_id = customer_id"],
+                             "relationship": "many_to_one", "active": True,
+                             "cite": "relationships.tmdl:1"}]
+             and [c["column"] for c in d["columns"]] == ["STATUS"]
+             and d["tables"][0]["description"] == "Orders placed in the store."
+             and d["populations"][0]["rule"] == '[status] <> "test"',
+             str((d["joins"], d["columns"], d["populations"]))[:300])
+
+        # A public model renames the warehouse's UnitCost to ShippingCost and
+        # NetPrice to UnitCost in one step, over a NetPrice its upstream query
+        # computed: renames in one step are simultaneous, steps apply upstream
+        # first, and a computed column is not a warehouse column.
+        chain = ['let Source = up, #"R" = Table.RenameColumns(Source,'
+                 '{{"UnitCost", "ShippingCost"}, {"NetPrice", "UnitCost"}}) in R',
+                 'let #"A" = Table.AddColumn(raw, "NewNetPrice", each 1), '
+                 '#"R" = Table.RenameColumns(#"A",{{"NewNetPrice", "NetPrice"}}) in R']
+        case("a rename swap resolves upstream first, and a computed column is known",
+             _sl._renames(chain) == {"NetPrice": "NewNetPrice",
+                                     "ShippingCost": "UnitCost",
+                                     "UnitCost": "NewNetPrice"}
+             and _sl._added(chain) == {"NewNetPrice"}, str(_sl._renames(chain)))
+
+        # a hand-written declared file is held to the same checks
+        dfile = tmp / "declared-by-hand.json"
+        dfile.write_text(json.dumps({"source": "by hand", "metrics": [
+            {"name": "ok", "expression": "SUM(AMOUNT_EUR)", "table": "SHOP.ORDERS",
+             "filters": "STATUS = 'completed'", "translated": False, "cite": "x:1"},
+            {"name": "ghost", "expression": "SUM(TIP)", "table": "SHOP.ORDERS"},
+            {"name": "broken", "expression": "SUM(AMOUNT_EUR", "table": "SHOP.ORDERS"},
+            {"name": "elsewhere", "expression": "SUM(X)", "table": "SHOP.NOPE"}],
+            "columns": [{"table": "SHOP.ORDERS", "column": "STATUS",
+                         "enum_values": ["completed", "cancelled"]},
+                        {"table": "SHOP.ORDERS", "column": "DISCOUNT",
+                         "enum_values": [True, False]}]}))
+        hd = _sl.validate(_sl.load(dfile), pschema)
+        hr = {r["name"]: r["reason"] for r in hd["rejects"]}
+        case("a declared file's metrics and value lists are checked against the "
+             "schema and parsed, and every reject says why",
+             [m["name"] for m in hd["metrics"]] == ["ok"]
+             and "TIP not in SHOP.ORDERS" in hr.get("ghost", "")
+             and "does not parse" in hr.get("broken", "")
+             and "not in the schema export" in hr.get("elsewhere", "")
+             and [c["column"] for c in hd["columns"]] == ["STATUS"]
+             and "enum_values" in hr.get("DISCOUNT", ""), str(hr)[:300])
+
+        # MetricFlow's classic spec
+        mf = tmp / "mf" / "models"
+        mf.mkdir(parents=True)
+        (mf / "semantic.yml").write_text(_yaml.safe_dump({
+            "semantic_models": [
+                {"name": "orders", "model": "ref('orders')",
+                 "description": "One row per order.",
+                 "entities": [{"name": "order_id", "type": "primary"},
+                              {"name": "customer", "type": "foreign",
+                               "expr": "customer_id"}],
+                 "dimensions": [{"name": "is_food_order", "type": "categorical"}],
+                 "measures": [{"name": "order_total", "agg": "sum"},
+                              {"name": "order_count", "agg": "sum", "expr": 1}]},
+                {"name": "customers", "model": "ref('customers')",
+                 "entities": [{"name": "customer", "type": "primary",
+                               "expr": "customer_id"}],
+                 "dimensions": [{"name": "customer_type", "type": "categorical"}]}],
+            "metrics": [
+                {"name": "order_total", "type": "simple",
+                 "type_params": {"measure": "order_total"}},
+                {"name": "food_orders", "type": "simple",
+                 "type_params": {"measure": "order_count"},
+                 "filter": "{{ Dimension('order_id__is_food_order') }} = true"},
+                {"name": "new_customer_orders", "type": "simple",
+                 "type_params": {"measure": "order_count"},
+                 "filter": "{{ Dimension('customer__customer_type') }} = 'new'"},
+                {"name": "orders_7d", "type": "cumulative",
+                 "type_params": {"measure": "order_count", "window": "7 days"}}]}))
+        mschema = {"MAIN.ORDERS": {"ORDER_ID": "", "CUSTOMER_ID": "", "ORDER_TOTAL": "",
+                                   "IS_FOOD_ORDER": ""},
+                   "MAIN.CUSTOMERS": {"CUSTOMER_ID": "", "CUSTOMER_TYPE": ""}}
+        md = _sl.validate(_sl.load(tmp / "mf"), mschema)
+        mm = {m["name"]: m for m in md["metrics"]}
+        mr = {r["name"]: r["reason"] for r in md["review"]}
+        case("MetricFlow metrics keep their own SQL, a same-model filter included, "
+             "and entities become joins",
+             mm.get("order_total", {}).get("expression") == "SUM(order_total)"
+             and mm["order_total"]["table"] == "MAIN.ORDERS"
+             and mm["order_total"]["translated"] is False
+             and mm.get("food_orders", {}).get("filters") == "is_food_order = true"
+             and md["joins"][0]["left"] == "MAIN.ORDERS"
+             and md["joins"][0]["on"] == ["customer_id = customer_id"],
+             str((md["metrics"], md["joins"]))[:300])
+        case("a filter on a related model and a cumulative metric go to review",
+             "outside this model" in mr.get("new_customer_orders", "")
+             and "cumulative" in mr.get("orders_7d", ""), str(mr))
+
+        # MetricFlow's newer spec: the semantic model on the dbt model itself
+        mf2 = tmp / "mf2" / "models"
+        mf2.mkdir(parents=True)
+        (mf2 / "orders.yml").write_text(_yaml.safe_dump({"models": [
+            {"name": "orders", "description": "One row per order.",
+             "semantic_model": {"enabled": True},
+             "columns": [{"name": "order_id", "entity": {"type": "primary"}},
+                         {"name": "customer_id", "description": "Who ordered.",
+                          "entity": {"type": "foreign", "name": "customer"}},
+                         {"name": "order_total", "dimension": {"type": "categorical",
+                                                               "name": "order_total_dim"}},
+                         {"name": "is_food_order", "dimension": {"type": "categorical"}}],
+             "metrics": [{"name": "order_total", "type": "simple", "agg": "sum"},
+                         {"name": "orders", "type": "simple", "agg": "sum", "expr": 1},
+                         {"name": "large_orders", "type": "simple", "agg": "sum",
+                          "expr": 1, "filter":
+                          "{{ Dimension('order_id__order_total_dim') }} >= 20"}]},
+            {"name": "customers", "semantic_model": True,
+             "columns": [{"name": "customer_id",
+                          "entity": {"type": "primary", "name": "customer"}}]}],
+            "metrics": [{"name": "large_share", "type": "ratio",
+                         "numerator": "large_orders", "denominator": "orders"},
+                        {"name": "aov", "type": "derived", "expr": "a / b"}]}))
+        (tmp / "mf2" / "dbt_project.yml").write_text("models:\n  shop:\n    +materialized: table\n")
+        n2 = _sl.validate(_sl.load(tmp / "mf2"), mschema)
+        nm = {m["name"]: m for m in n2["metrics"]}
+        nr = {r["name"]: r["reason"] for r in n2["review"]}
+        case("MetricFlow's inline spec: metrics on the model, entities on columns, "
+             "and a ratio whose part carries a filter goes to review",
+             nm.get("order_total", {}).get("expression") == "SUM(order_total)"
+             and nm.get("large_orders", {}).get("filters") == "order_total >= 20"
+             and nm["large_orders"]["table"] == "MAIN.ORDERS"
+             and n2["joins"][0]["on"] == ["customer_id = customer_id"]
+             and "carry filters" in nr.get("large_share", "")
+             and "derived" in nr.get("aov", "")
+             and any(c["column"] == "CUSTOMER_ID" for c in n2["columns"]),
+             str((n2["metrics"], n2["review"], n2["joins"]))[:400])
+
+        # Cube's YAML data model
+        cb = tmp / "cube" / "model" / "cubes"
+        cb.mkdir(parents=True)
+        (cb / "orders.yml").write_text(_yaml.safe_dump({"cubes": [
+            {"name": "orders", "sql_table": "main.orders",
+             "description": "One row per order.",
+             "joins": [{"name": "customers", "relationship": "many_to_one",
+                        "sql": "{CUBE}.customer_id = {customers}.customer_id"}],
+             "dimensions": [{"name": "order_total", "sql": "{CUBE}.order_total",
+                             "type": "number", "description": "Order total in EUR."}],
+             "measures": [
+                 {"name": "count", "type": "count"},
+                 {"name": "large", "type": "count",
+                  "filters": [{"sql": "{CUBE}.order_total >= 20"}]},
+                 {"name": "revenue", "sql": "order_total", "type": "sum"},
+                 {"name": "avg_order", "sql": "{revenue} / NULLIF({count}, 0)",
+                  "type": "number"},
+                 {"name": "large_share", "sql": "{large} / NULLIF({count}, 0)",
+                  "type": "number"},
+                 {"name": "by_type", "type": "count",
+                  "filters": [{"sql": "{customers}.customer_type = 'new'"}]},
+                 {"name": "revenue_7d", "sql": "order_total", "type": "sum",
+                  "rolling_window": {"trailing": "7 day"}}]},
+            {"name": "customers", "sql_table": "main.customers",
+             "measures": [{"name": "count", "type": "count"}]},
+            {"name": "recent", "sql": "select * from main.orders where x > 1"}]}))
+        cd = _sl.validate(_sl.load(tmp / "cube"), mschema)
+        cm = {m["name"]: m for m in cd["metrics"]}
+        cr = {r["name"]: r["reason"] for r in cd["review"]}
+        case("Cube: measures keep their SQL, filters and measure references resolve, "
+             "joins come from the condition",
+             cm.get("orders.count", {}).get("expression") == "COUNT(*)"
+             and cm.get("orders.large", {}).get("filters") == "order_total >= 20"
+             and cm.get("orders.avg_order", {}).get("expression")
+             == "SUM(order_total) / NULLIF(COUNT(*), 0)"
+             and cd["joins"] == [{"left": "MAIN.ORDERS", "right": "MAIN.CUSTOMERS",
+                                  "on": ["customer_id = customer_id"],
+                                  "relationship": "many_to_one", "active": True,
+                                  "cite": "model/cubes/orders.yml:" + cd["joins"][0]["cite"]
+                                  .split(":")[-1]}]
+             and [c["column"] for c in cd["columns"]] == ["ORDER_TOTAL"],
+             str((cd["metrics"], cd["joins"]))[:400])
+        case("Cube: a filtered ratio, a related-cube filter and a rolling window go "
+             "to review; a cube built on a query is rejected",
+             "carry filters" in cr.get("orders.large_share", "")
+             and "related table" in cr.get("orders.by_type", "")
+             and "rolling-window" in cr.get("orders.revenue_7d", "")
+             and any(r["kind"] == "table" and r["name"] == "recent"
+                     for r in cd["rejects"]), str((cr, cd["rejects"]))[:400])
+
+        # LookML: views, refinements, measures, filters, explores
+        lk = tmp / "lookml"
+        (lk / "views").mkdir(parents=True)
+        (lk / "views" / "orders.view.lkml").write_text(
+            "# a comment\nview: orders {\n  sql_table_name: `proj.main.orders` ;;\n"
+            "  dimension: order_id { primary_key: yes type: number sql: ${TABLE}.order_id ;; }\n"
+            "  dimension: customer_id { type: number sql: ${TABLE}.customer_id ;;\n"
+            '    description: "Who ordered." }\n'
+            "  dimension: order_total { type: number sql: ${TABLE}.order_total ;; }\n"
+            "  dimension: is_food { type: yesno sql: ${TABLE}.is_food_order ;; }\n"
+            "  dimension: is_big { type: yesno sql: ${order_total} > 100 ;; }\n"
+            "  dimension: is_vip { type: yesno sql: ${customers.customer_type} = 'vip' ;; }\n"
+            "  measure: count { type: count }\n"
+            "  measure: revenue { type: sum sql: ${order_total} ;; }\n"
+            '  measure: food_orders { type: count filters: [is_food: "yes"] }\n'
+            '  measure: big_orders { type: count filters: [is_big: "yes", order_total: ">20"] }\n'
+            "  measure: aov { type: number sql: ${revenue} / NULLIF(${count}, 0) ;; }\n"
+            "  measure: food_share { type: number sql: ${food_orders} / NULLIF(${count}, 0) ;; }\n"
+            '  measure: vip_orders { type: count filters: [is_vip: "yes"] }\n'
+            "  measure: median_total { type: median sql: ${order_total} ;; }\n}\n")
+        (lk / "views" / "customers.view.lkml").write_text(
+            "view: customers {\n  sql_table_name: main.customers ;;\n"
+            "  dimension: customer_id { primary_key: yes sql: ${TABLE}.customer_id ;; }\n"
+            "  dimension: customer_type { sql: ${TABLE}.customer_type ;; }\n}\n"
+            "view: +customers {\n  measure: count { type: count }\n}\n"
+            "view: recent {\n  derived_table: { sql: SELECT 1 ;; }\n"
+            "  measure: count { type: count }\n}\n")
+        (lk / "shop.model.lkml").write_text(
+            'connection: "wh"\ninclude: "/views/*.view"\n'
+            "explore: orders {\n  join: customers {\n    type: left_outer\n"
+            "    sql_on: ${orders.customer_id} = ${customers.customer_id} ;;\n"
+            "    relationship: many_to_one\n  }\n}\n")
+        ld = _sl.validate(_sl.load(lk), mschema)
+        lm = {m["name"]: m for m in ld["metrics"]}
+        lr = {r["name"]: r["reason"] for r in ld["review"]}
+        case("LookML: measures keep their SQL; yes/no and comparison filters, "
+             "refinements and explore joins resolve",
+             lm.get("orders.revenue", {}).get("expression") == "SUM(order_total)"
+             and lm["orders.revenue"]["table"] == "MAIN.ORDERS"
+             and lm.get("orders.food_orders", {}).get("filters") == "(is_food_order)"
+             and lm.get("orders.big_orders", {}).get("filters")
+             == "(order_total > 100) AND order_total >20"
+             and lm.get("orders.aov", {}).get("expression")
+             == "(SUM(order_total)) / NULLIF((COUNT(*)), 0)"
+             and "customers.count" in lm
+             and ld["joins"][0]["on"] == ["customer_id = customer_id"]
+             and [c["column"] for c in ld["columns"]] == ["CUSTOMER_ID"],
+             str((ld["metrics"], ld["joins"]))[:400])
+        case("LookML: a filtered ratio, a filter reading another view and a median "
+             "go to review; a derived table is rejected",
+             "carry filters" in lr.get("orders.food_share", "")
+             and "another view" in lr.get("orders.vip_orders", "")
+             and "median" in lr.get("orders.median_total", "")
+             and any(r["kind"] == "table" and r["name"] == "recent"
+                     for r in ld["rejects"]), str((lr, ld["rejects"]))[:400])
+
+        # through the kit: ingest, evidence, prefill, packets, metrics review
+        sl_schema = tmp / "sl-schema.csv"
+        sl_schema.write_text("TABLE_SCHEMA,TABLE_NAME,COLUMN_NAME,DATA_TYPE\n" + "".join(
+            f"{t.split('.')[0]},{t.split('.')[1]},{c},{ty}\n"
+            for t, cols in pschema.items() for c, ty in cols.items()))
+        (tmp / "sl-empty").mkdir()
+        sws, srun = tmp / "sl-ws", tmp / "sl-run"
+        steps = [["ingest.py", "--input", tmp / "sl-empty", "--schema", sl_schema,
+                  "--workspace", sws, "--adapter", "none", "--declared", pbi],
+                 ["evidence.py", "--workspace", sws],
+                 ["skeleton.py", "--workspace", sws, "--run", srun, "--batches", "1"],
+                 ["dispatch_prep.py", "prefill", "--run", srun, "--workspace", sws],
+                 ["dispatch_prep.py", "packets", "--run", srun, "--workspace", sws]]
+        outs = []
+        for st in steps:
+            rr = subprocess.run([sys.executable, str(KIT / st[0])] + [str(a) for a in st[1:]],
+                                capture_output=True, text=True)
+            outs.append(rr)
+            if rr.returncode:
+                break
+        ok = all(o.returncode == 0 for o in outs) and len(outs) == len(steps)
+        cands = (json.loads((sws / "evidence" / "metric_candidates.json").read_text())
+                 if ok else [])
+        jcs = (json.loads((sws / "evidence" / "join_candidates.json").read_text())
+               if ok else [])
+        shell = (_yaml.safe_load((srun / "cassis" / "tables" / "SHOP" / "ORDERS.yml")
+                                 .read_text()) if ok else {})
+        status = next((c for c in shell.get("columns") or []
+                       if c.get("name") == "STATUS"), {})
+        packet = (srun / "packets" / "batch-0.md").read_text() if ok else ""
+        case("ingest reports what held and what did not; evidence takes declared "
+             "metrics and joins; prefill keeps the layer's docs as owner text",
+             ok and "4 metrics (4 translated from DAX, to confirm)" in outs[0].stdout
+             and "rejected metric Target" in outs[0].stdout
+             and sum(1 for c in cands if c.get("provenance") == "declared") == 4
+             and any(j.get("provenance") == "declared" for j in jcs)
+             and status.get("description") == "Order status as recorded at checkout"
+             and status.get("description_source") == "semantic_layer"
+             and "the semantic layer reads only rows where" in packet,
+             "".join((o.stdout + o.stderr)[-200:] for o in outs))
+        # stage B stand-ins: the domain tree and the join dispositions; one
+        # metric the agent already wrote, which a declared twin must not repeat
+        dec = srun / "decisions"
+        dec.mkdir(parents=True, exist_ok=True)
+        (dec / "domains.yml").write_text(_yaml.safe_dump(
+            {"SHOP.ORDERS": "shop", "SHOP.CUSTOMERS": "shop"}))
+        (dec / "joins.yml").write_text(_yaml.safe_dump([
+            {"left": j["left"], "right": j["right"], "on": j["on"],
+             **({"verdict": "promote", "relationship": "many_to_one",
+                 "description": "Each order is placed by one customer."}
+                if j.get("provenance") == "declared"
+                else {"verdict": "reject", "reason": "not needed here"})}
+            for j in jcs]))
+        for rel_path, title in (("README.md", "Shop"), ("shop/README.md", "Shop")):
+            dp_ = srun / "cassis" / "domains" / rel_path
+            dp_.parent.mkdir(parents=True, exist_ok=True)
+            dp_.write_text(f"# {title}\n\nOrders and the customers who place them.\n")
+        (srun / "cassis" / "metrics").mkdir(parents=True, exist_ok=True)
+        (srun / "cassis" / "metrics" / "completed_revenue.yml").write_text(
+            "name: completed_revenue\ntable_schema: SHOP\ntable_name: ORDERS\n"
+            "expression: SUM(AMOUNT_EUR)\nfilters: status = 'completed'\n"
+            "description: Written by the agent before the script ran.\n")
+        ra = subprocess.run([sys.executable, str(KIT / "apply_synthesis.py"),
+                             "--run", str(srun), "--workspace", str(sws)],
+                            capture_output=True, text=True)
+        written = {p.stem: _yaml.safe_load(p.read_text())
+                   for p in (srun / "cassis" / "metrics").glob("*.yml")}
+        case("declared metrics are written by a script: translations flagged, an "
+             "agent's twin kept, review items and rejects never written",
+             ra.returncode == 0
+             and set(written) == {"completed_revenue", "total_amount",
+                                  "amount_per_order", "net"}
+             and written["total_amount"]["declared"]["translated"] is True
+             and written["total_amount"]["declared"]["original_expression"]
+             == "SUM(orders[amount])"
+             and written["completed_revenue"]["description"]
+             == "Written by the agent before the script ran."
+             and "1 already defined" in ra.stdout,
+             (ra.stdout + ra.stderr)[-300:] + str(sorted(written)))
+        re_ = subprocess.run([sys.executable, str(KIT / "emit.py"), "--emit", "cassis",
+                              "--run", str(srun), "--workspace", str(sws)],
+                             capture_output=True, text=True)
+        emitted = srun / "emit" / "cassis" / "metrics" / "total_amount.yml"
+        em = _yaml.safe_load(emitted.read_text()) if emitted.exists() else {}
+        prov = (json.loads((srun / "emit" / "provenance.json").read_text())
+                if (srun / "emit" / "provenance.json").exists() else {})
+        case("the emitted metric is canonical, and where it came from moves to "
+             "provenance.json",
+             re_.returncode == 0 and em.get("expression") == "SUM(AMOUNT_EUR)"
+             and em.get("domain_path") == "shop" and "declared" not in em
+             and prov.get("__metrics__", {}).get("total_amount", {}).get("translated")
+             is True and "metrics.declared" not in re_.stdout,
+             (re_.stdout + re_.stderr)[-300:])
+        rv = subprocess.run([sys.executable, str(KIT / "verify.py"),
+                             "--tree", str(srun / "cassis"), "--workspace", str(sws),
+                             "--only", "metrics/*"],
+                            capture_output=True, text=True)
+        case("the kit's own gates pass on the declared metric files",
+             rv.returncode == 0, (rv.stdout + rv.stderr)[-400:])
+        import os as _os
+        import shutil as _shutil
+        if _shutil.which("cassis") and _os.environ.get("CASSIS_API_KEY"):
+            env = {k: v for k, v in _os.environ.items() if k != "CASSIS_PROJECT_ID"}
+            rc = subprocess.run(["cassis", "context", "check", str(srun / "emit")],
+                                capture_output=True, text=True, env=env)
+            case("a tree with declared metrics passes `cassis context check`",
+                 rc.returncode == 0, (rc.stdout + rc.stderr)[-400:])
+        else:
+            harness.skip("a tree with declared metrics passes `cassis context check`",
+                         "needs cassis-cli and CASSIS_API_KEY")
+        (srun / "cassis" / "metrics" / "total_amount.yml").write_text(
+            _yaml.safe_dump(written["total_amount"], sort_keys=False))
+        rr = subprocess.run([sys.executable, str(KIT / "metrics_review.py"),
+                             "--run", str(srun), "--workspace", str(sws)],
+                            capture_output=True, text=True)
+        review_md = (srun / "METRICS-REVIEW.md").read_text() if rr.returncode == 0 else ""
+        row = next((ln for ln in review_md.splitlines() if "total_amount" in ln), "")
+        case("a metric the layer declares counts as its source, but a DAX "
+             "translation alone stays VERIFY until a person confirms it",
+             row.startswith("| VERIFY") and "declared in tmdl:Shop.SemanticModel" in row
+             and "confirm the SQL" in row
+             and "## Declared definitions that are not metrics yet" in review_md
+             and "EU Amount" in review_md and "Target" in review_md,
+             (rr.stdout + rr.stderr)[-200:] + row)
+
 
 def port_tests():
     """The public-tree export: build-repo only, SKIPs on an exported tree

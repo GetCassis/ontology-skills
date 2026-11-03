@@ -89,7 +89,8 @@ def match_corpus(cores, idx):
 # a person made; `common.glossary_tier` is where the two are told apart. Both
 # still ship their text and both still read VERIFY in a packet — the tier
 # decides only what may corroborate a number.
-OWNER_TIERS = {"repo_text", "warehouse_comment", "warehouse_glossary"}
+OWNER_TIERS = {"repo_text", "warehouse_comment", "warehouse_glossary",
+               "semantic_layer"}
 
 
 def owner_text_on_args(run: Path, m: dict, cores) -> list:
@@ -119,10 +120,17 @@ def owner_text_on_args(run: Path, m: dict, cores) -> list:
 def review_rows(run: Path, workspace: Path):
     tree = load_tree(run / "cassis")
     idx = corpus_index(workspace / "evidence")
+    # A semantic layer's declared metrics sit in the same candidate file but are
+    # not a query corpus: with only those, a metric nobody queried is unread,
+    # not UNGROUNDED.
+    has_corpus = bool(idx) and any(h.get("provenance") != "declared"
+                                   for hs in idx.values() for h in hs)
     rows = []
     for name, m in sorted(tree["metrics"].items()):
         cores = metric_expr_cores(m.get("expression"))
-        corpus_hits = match_corpus(cores, idx) if (idx and cores) else []
+        hits = match_corpus(cores, idx) if (idx and cores) else []
+        corpus_hits = [h for h in hits if h.get("provenance") != "declared"]
+        declared_hits = [h for h in hits if h.get("provenance") == "declared"]
         occurrences = sum(h["occurrences"] for h in corpus_hits)
         corpus_sources = sorted({s for h in corpus_hits for s in h.get("sources") or []})
         owner_cols = owner_text_on_args(run, m, cores)
@@ -133,24 +141,39 @@ def review_rows(run: Path, workspace: Path):
             plural = "source" if len(corpus_sources) == 1 else "sources"
             evidence.append(f"corpus ×{occurrences} "
                             f"({len(corpus_sources)} {plural}: {shown})")
+        translated = []
+        for h in declared_hits:
+            d = h.get("declared") or {}
+            evidence.append(f"declared in {d.get('source')} as {d.get('name')!r} "
+                            f"({(h.get('sources') or [''])[0].split(':', 1)[-1]})")
+            if d.get("translated"):
+                translated.append(h)
+                evidence.append(f"translated by the kit from {d.get('language')} "
+                                f"`{' '.join(str(d.get('original_expression')).split())}`"
+                                f": confirm the SQL")
         for col, src in owner_cols:
             evidence.append(f"{col} described ({src})")
 
-        units = len(corpus_sources) + (1 if owner_cols else 0)
-        if idx is None:
+        units = len(corpus_sources) + (1 if owner_cols else 0) + len(declared_hits)
+        if not has_corpus and not declared_hits:
             stamp = "VERIFY"
             if not evidence:
                 evidence.append("no query corpus — human read is the gate")
         elif not cores:
             stamp = "VERIFY"
             evidence.append("expression not machine-checkable")
-        elif units >= 2:
+        elif units - len(translated) >= 2:
             stamp = "ok"
-        elif units == 1:
+        elif units >= 1:
+            # a translation the kit wrote is never the second unit that
+            # lifts a metric to ok: a person confirms it first
             stamp = "VERIFY"
-        else:
+        elif has_corpus:
             stamp = "UNGROUNDED"
             evidence = ["none found"]
+        else:
+            stamp = "VERIFY"
+            evidence.append("no query corpus — human read is the gate")
 
         definition = m.get("expression") or ""
         # The corpus miner keeps only the aggregate core, so a WHERE clause is
@@ -173,10 +196,43 @@ def review_rows(run: Path, workspace: Path):
     # riskiest first: ungrounded, then single-source; business synonyms on a
     # weak stamp are the §14 red line, so they lead within their stamp
     rows.sort(key=lambda r: (STAMP_ORDER[r["stamp"]], not r["synonyms"], r["metric"]))
-    return rows, idx is not None
+    return rows, has_corpus
 
 
-def render_md(rows, has_corpus: bool) -> str:
+def render_declared(declared: dict) -> list:
+    """What a semantic layer declared that could not become a one-table metric,
+    and what did not hold against the schema export. Not in the tree: a person
+    decides which of these matter."""
+    review, rejects = declared.get("review") or [], declared.get("rejects") or []
+    if not (review or rejects):
+        return []
+
+    def cell(s):
+        return " ".join(str(s).split()).replace("|", "\\|")
+    lines = ["", "## Declared definitions that are not metrics yet", ""]
+    if review:
+        lines += [f"{len(review)} measures from the semantic layer have no single "
+                  f"one-table SQL expression. None is in the tree. Define the ones "
+                  f"that matter by hand, or record them in QUESTIONS.md.", "",
+                  "| measure | why | definition | where |", "|---|---|---|---|"]
+        for r in review:
+            lines.append(f"| {cell(r['name'])} | {cell(r['reason'])} "
+                         f"| `{cell(r.get('original_expression'))[:160]}` "
+                         f"| {cell(r.get('source'))} {cell(r.get('cite'))} |")
+    if rejects:
+        by_kind = {}
+        for r in rejects:
+            by_kind.setdefault(r["kind"], []).append(r)
+        lines += ["", f"{len(rejects)} declared definitions did not hold against the "
+                  f"schema export and were left out "
+                  f"({', '.join(f'{len(v)} {k}' for k, v in sorted(by_kind.items()))}). "
+                  f"Each reason is in `declared.json` under `rejects`; the first:", ""]
+        lines += [f"- {cell(r['kind'])} {cell(r['name'])}: {cell(r['reason'])}"
+                  for r in rejects[:10]]
+    return lines
+
+
+def render_md(rows, has_corpus: bool, declared=None) -> str:
     counts = {s: sum(1 for r in rows if r["stamp"] == s) for s in STAMP_ORDER}
     lines = [
         "# Metrics review — present, then proceed",
@@ -216,6 +272,7 @@ def render_md(rows, has_corpus: bool) -> str:
         lines.append(f"| {stamp}{warn} | {cell(name)} | {cell(r['table'])} "
                      f"| `{cell(r['definition'])}` | {cell('; '.join(r['evidence']))} "
                      f"| {cell(Path(r['file']).name)} |")
+    lines += render_declared(declared or {})
     return "\n".join(lines) + "\n"
 
 
@@ -231,7 +288,8 @@ def main():
     rows, has_corpus = review_rows(args.run, args.workspace)
     out = args.out or (args.run / "METRICS-REVIEW.md")
     out.parent.mkdir(parents=True, exist_ok=True)
-    out.write_text(render_md(rows, has_corpus))
+    dp = args.workspace / "declared.json"
+    out.write_text(render_md(rows, has_corpus, load_json(dp) if dp.exists() else None))
     dump_json(rows, args.run / "metrics_review.json")
 
     n_bad = sum(1 for r in rows if r["stamp"] == "UNGROUNDED")

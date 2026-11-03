@@ -263,12 +263,15 @@ def main():
         t = qualify(r["table"]) or r["table"]
         if t == r["table"] and t not in known:
             unqualified.append(r["table"])
+        # A layout that documents a table inside its SQL file (a SQLMesh MODEL
+        # header) has no YAML: the SQL file is where the fact was read.
+        src = r.get("yml_path") or r.get("sql_path")
         for col, values in (r.get("enums") or {}).items():
             enums.append({"id": fact_id("enum", t, col), "table": t, "column": col,
-                          "values": values, "source": r.get("yml_path")})
+                          "values": values, "source": src})
         if r.get("granularity"):
             grains.append({"id": fact_id("grain", t), "table": t,
-                           "columns": r["granularity"], "source": r.get("yml_path")})
+                           "columns": r["granularity"], "source": src})
     # A primary key the warehouse declares is a grain the owner stated. The
     # repo's own test wins where both exist; ingest wrote these and, until
     # now, nothing read them.
@@ -281,6 +284,17 @@ def main():
                 grains.append({"id": fact_id("grain", t), "table": t,
                                "columns": cols,
                                "source": "warehouse primary key"})
+    # A semantic layer's own definitions, already validated against the schema
+    # export at ingest (declared.json): its value lists are complete sets the
+    # owner stated, like an accepted_values test.
+    declared = load_json(ws / "declared.json") if (ws / "declared.json").exists() \
+        else {}
+    for c in declared.get("columns") or []:
+        if c.get("enum_values"):
+            enums.append({"id": fact_id("enum", "declared", c["table"], c["column"]),
+                          "table": c["table"], "column": c["column"],
+                          "values": [str(v) for v in c["enum_values"]],
+                          "source": f"declared:{c.get('cite')}"})
     dump_json(enums, ev / "enums.json")
     dump_json(grains, ev / "grains.json")
 
@@ -334,6 +348,14 @@ def main():
                           "left": fk["left"], "right": fk["right"],
                           "on": fk["on"], "provenance": "warehouse_fk",
                           "sources": [fk.get("constraint") or "declared"]})
+    for j in declared.get("joins") or []:
+        joins.append({"id": fact_id("join", "declared", j["left"], j["right"],
+                                    str(j["on"])),
+                      "left": j["left"], "right": j["right"], "on": j["on"],
+                      "relationship": j.get("relationship"),
+                      "provenance": "declared",
+                      "sources": [f"declared:{j.get('cite')}"]
+                      + ([] if j.get("active", True) else ["inactive in the model"])})
     joins += mine_shared_key_joins(schema, grains,
                                    {(j.get("left"), j.get("right")) for j in joins})
     dump_json(joins, ev / "join_candidates.json")
@@ -361,6 +383,17 @@ def main():
                         "sources": rec["sources"]})
     metrics.sort(key=lambda m: -m["occurrences"])
     metrics = metrics[:200]
+    # A metric the semantic layer declares is one independent source on its own
+    # (the owner defined it), whatever the query corpus holds. One translated
+    # from DAX carries `translated`: the SQL is the kit's, the definition the owner's.
+    for m in declared.get("metrics") or []:
+        metrics.append({"id": fact_id("metric", "declared", m["name"], m["expression"]),
+                        "expression": m["expression"], "tables": [m["table"]],
+                        "occurrences": 1, "sources": [f"declared:{m.get('cite')}"],
+                        "provenance": "declared",
+                        "declared": {k: m.get(k) for k in (
+                            "name", "filters", "description", "translated",
+                            "original_expression", "language", "source")}})
     dump_json(metrics, ev / "metric_candidates.json")
 
     # usage ranking (in-scope), plus out-of-scope demand as its own signal —
@@ -471,7 +504,10 @@ def main():
 
     print(f"evidence: {len(enums)} enums | {len(grains)} grains | "
           f"{len(joins)} join candidates | {len(metrics)} metric candidates "
-          f"(>=3 occurrences, resolved) | {len(usage)} tables ranked | "
+          f"(>=3 occurrences, resolved"
+          + (f", {len(declared.get('metrics') or [])} declared by a semantic layer"
+             if declared.get("metrics") else "")
+          + f") | {len(usage)} tables ranked | "
           f"{len(nonsummable)} non-summable candidates")
 
 
