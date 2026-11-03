@@ -164,16 +164,21 @@ that opened "Nothing needs you." Terse, consequence-ordered, and about them.
 ## What ships at the end
 
 `finish` writes `<run>/emit/cassis/` — the ontology tree, the standalone result, which is what
-`cassis ontology upload` imports, for anyone who later wants that. The
+`cassis context upload` imports, for anyone who later wants that. The
 working tree under `<run>/cassis/` is not that format: it carries
 `description_source` on every column, which the import rejects, and its table
 files are keyed `name: SCHEMA.TABLE`. Keep enrichment in the working tree and
-never hand-edit the emitted one — re-run `emit.py` instead.
+never hand-edit the emitted one — re-run `emit.py` instead. The emitted tree
+names tables and columns in the warehouse's own case, and leaves out a
+description that only repeats a warehouse comment, since Cassis reads the
+comment itself; the text stays in `emit/provenance.json`, and
+`emit.py --keep-warehouse-comments` copies it in for a reader that never sees
+the warehouse.
 
 `finish` also copies `templates/output-CLAUDE.md` in as `<run>/emit/CLAUDE.md`,
 so the tree can be handed to someone with no context: it names each file and
 gives the reading order, and defers the modeling doctrine to `AGENTS.md`
-(which `cassis ontology fmt` writes in for anyone who installs cassis-cli).
+(which `cassis context fmt` writes in for anyone who installs cassis-cli).
 `OUTPUT.md` in this repo is the same map for the whole run directory.
 
 With `--emit dbt` the ontology is also merged back into the dbt project it came
@@ -193,7 +198,9 @@ anything already there, and everything dbt has no field for under
   owner's own words. Read them against the defining SQL and change one only if the
   SQL contradicts it. Rewriting them in your own voice destroys the vocabulary the
   company already uses, and the run's biggest saving. Your work is the `NEEDS DESCRIPTION`
-  columns. Draft only what the supplied evidence supports, leave the rest as questions,
+  columns. Two moves apply to `ok` text too: a list of stored values goes into the column's
+  `enum_values`, and a "one row per" sentence goes, because `grain` says it; keep every other
+  word. Draft only what the supplied evidence supports, leave the rest as questions,
   and stamp every drafted column `description_source: drafted` so the metrics review can
   never mistake model-written prose for the owner's own text. Legacy `authored` stamps
   remain valid non-owner provenance.
@@ -243,6 +250,6 @@ on different content. Do not fold it silently into the final report.
 
 `python3 tests/test_kit.py`. No warehouse data, no env var: it runs on a fresh
 clone and SKIPs what it cannot run (`dbt parse` without dbt-core installed,
-`cassis ontology check` without a `CASSIS_API_KEY`). Run it after changing
+`cassis context check` without a `CASSIS_API_KEY`). Run it after changing
 anything in the kit — including the exporter, whose test is a real round trip
 through dbt and the Cassis CLI rather than an assertion about the yml.

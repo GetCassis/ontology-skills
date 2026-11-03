@@ -11,7 +11,7 @@ clone. Two halves:
   export_tests()     the two export targets, each handed to the tool that has
                      to accept it (tests/roundtrip.py). The dbt half needs
                      dbt-core + dbt-duckdb and SKIPs without them; the
-                     `cassis ontology check` half needs CASSIS_API_KEY and
+                     `cassis context check` half needs CASSIS_API_KEY and
                      SKIPs without it.
 
 Run: python3 tests/test_kit.py
@@ -543,7 +543,7 @@ def kit_only_tests():
         case("the reader guide defers the doctrine instead of restating it",
              "The modeling doctrine" in flat and "is not in this file" in flat
              and "defers to that one" in flat
-             and "cassis ontology fmt" in flat, flat[:160])
+             and "cassis context fmt" in flat, flat[:160])
 
         # --- one count, four places that state it ---
         # Renumbering the checkpoints and leaving a banner behind is a drift
@@ -1154,6 +1154,140 @@ def kit_only_tests():
         case("a typed export ingests without the warning",
              "WARN" not in buf.getvalue(), buf.getvalue()[:200])
 
+        # --- a `cassis schema pull` snapshot is a schema export ---
+        # It names tables `schema.table` with no `schema_name`, which keyed
+        # every table `.SCHEMA.TABLE`; its keys, foreign keys and view SQL were
+        # never read, and the warehouse's lower case never reached the tree.
+        from ingest import load_schema_physical, load_schema_relations
+        snap = tmp / ".schema.json"
+        snap.write_text(json.dumps({"schema_version": {"version": 3}, "tables": [
+            {"name": "shop.orders", "table_type": "TABLE",
+             "source_comment": "Orders placed in the store.",
+             "description": "The context's own text, not the warehouse's.",
+             "primary_key": ["order_id"],
+             "foreign_keys": [
+                 {"column": "customer_id", "references_schema": "shop",
+                  "references_table": "customers", "references_column": "id",
+                  "constraint_name": "fk_customer"},
+                 {"column": "region", "references_table": "regions",
+                  "references_column": "code", "constraint_name": "fk_region"},
+                 {"column": "country", "references_table": "regions",
+                  "references_column": "country", "constraint_name": "fk_region"}],
+             "columns": [{"name": "order_id", "data_type": "text"},
+                         {"name": "customer_id", "data_type": "text",
+                          "description": "Who ordered."},
+                         {"name": "region", "data_type": "text"},
+                         {"name": "country", "data_type": "text"}]},
+            {"name": "shop.customers", "primary_key": ["id"],
+             "source_comment": None,
+             "description": "Customers, as the context describes them.",
+             "columns": [{"name": "id", "data_type": "text"}]},
+            {"name": "shop.regions",
+             "columns": [{"name": "code"}, {"name": "country"}]},
+            {"name": "shop.active_customers", "table_type": "VIEW",
+             "definition": "select id from shop.customers where active",
+             "columns": [{"name": "id", "data_type": "text"}]}]}))
+        with contextlib.redirect_stdout(io.StringIO()):
+            sch, cmt, keys = load_schema_any(snap)
+        case("a `cassis schema pull` snapshot keys its tables SCHEMA.TABLE",
+             sorted(sch) == ["SHOP.ACTIVE_CUSTOMERS", "SHOP.CUSTOMERS",
+                             "SHOP.ORDERS", "SHOP.REGIONS"], sorted(sch))
+        case("its primary keys and the warehouse's own comments are read, "
+             "not the context's description",
+             keys.get("SHOP.ORDERS") == ["ORDER_ID"]
+             and cmt["SHOP.ORDERS"]["__table__"] == "Orders placed in the store."
+             and cmt["SHOP.ORDERS"]["CUSTOMER_ID"] == "Who ordered.",
+             str((keys, cmt))[:300])
+        case("a table the warehouse left uncommented has no comment, even when "
+             "the context describes it",
+             "__table__" not in cmt.get("SHOP.CUSTOMERS", {}),
+             str(cmt.get("SHOP.CUSTOMERS")))
+        fks, views = load_schema_relations(snap, set(sch))
+        case("declared foreign keys are read, a composite one whole",
+             {(f["right"], tuple(f["on"])) for f in fks} == {
+                 ("SHOP.CUSTOMERS", ("CUSTOMER_ID = ID",)),
+                 ("SHOP.REGIONS", ("REGION = CODE", "COUNTRY = COUNTRY"))},
+             str(fks)[:300])
+        case("a view's definition is kept as its defining SQL",
+             views == {"SHOP.ACTIVE_CUSTOMERS":
+                       "select id from shop.customers where active"}, views)
+        phys = load_schema_physical(snap)
+        case("the warehouse's own case is recorded for what ships",
+             phys["tables"]["SHOP.ORDERS"] == ["shop", "orders"]
+             and phys["columns"]["SHOP.ORDERS"]["CUSTOMER_ID"] == "customer_id",
+             str(phys)[:300])
+
+        # the same snapshot through ingest and evidence: keys become grains,
+        # foreign keys join candidates, the view a record with its SQL
+        sws, empty = tmp / "sws", tmp / "no-repo"
+        empty.mkdir()
+        r = subprocess.run([sys.executable, str(KIT / "ingest.py"),
+                            "--input", str(empty), "--schema", str(snap),
+                            "--workspace", str(sws), "--adapter", "none"],
+                           capture_output=True, text=True)
+        r2 = subprocess.run([sys.executable, str(KIT / "evidence.py"),
+                             "--workspace", str(sws)],
+                            capture_output=True, text=True)
+        ok = r.returncode == 0 and r2.returncode == 0
+        grains = json.loads((sws / "evidence" / "grains.json").read_text()) if ok else []
+        cands = (json.loads((sws / "evidence" / "join_candidates.json").read_text())
+                 if ok else [])
+        recs = (json.loads((sws / "repo" / "tables.json").read_text())["records"]
+                if ok else [])
+        case("a declared primary key becomes the table's grain",
+             {"table": "SHOP.ORDERS", "columns": ["ORDER_ID"],
+              "source": "warehouse primary key"}.items()
+             <= next((g for g in grains if g["table"] == "SHOP.ORDERS"), {}).items(),
+             (r.stdout + r.stderr + r2.stdout + r2.stderr)[-400:])
+        case("a declared foreign key is a join candidate with its provenance",
+             any(c.get("provenance") == "warehouse_fk"
+                 and c["right"] == "SHOP.REGIONS" for c in cands), str(cands)[:300])
+        case("a view no repo models arrives as a record carrying its SQL",
+             any(x["table"] == "SHOP.ACTIVE_CUSTOMERS" and "where active" in x["sql"]
+                 for x in recs), str(recs)[:300])
+
+        # --- what ships: physical case, stored values, warehouse comments ---
+        import emit as _emit
+        from collections import Counter as _Counter
+        _emit.PHYSICAL.update(phys)
+        try:
+            prov = {}
+            t = _emit.canonical_table(
+                "SHOP.ORDERS",
+                {"domain_path": "", "grain": ["ORDER_ID"],
+                 "description": "Orders placed in the store.",
+                 "columns": [{"name": "CUSTOMER_ID", "description": "Who ordered."},
+                             {"name": "REGION", "description": "Sales region.",
+                              "enum_values": ["N", {"value": "S"}, "N", "007"]}]},
+                sch, _Counter(), prov, cmt)
+            region = next(c for c in t["columns"] if c["name"] == "region")
+            case("a table ships in the warehouse's own case",
+                 (t["schema_name"], t["table_name"], t["grain"])
+                 == ("shop", "orders", ["order_id"]), str(t)[:200])
+            case("enum_values ship as text values, each once, in order",
+                 region["enum_values"] == [{"value": "N"}, {"value": "S"},
+                                           {"value": "007"}], str(region))
+            case("descriptions that repeat a warehouse comment are left to it",
+                 "description" not in t
+                 and "description" not in next(c for c in t["columns"]
+                                               if c["name"] == "customer_id")
+                 and region["description"] == "Sales region."
+                 and prov["SHOP.ORDERS"]["CUSTOMER_ID"][
+                     "deferred_to_warehouse_comment"] == "Who ordered.",
+                 str((t, prov))[:300])
+            j = _emit.canonical_join({"from_schema": "SHOP", "from_table": "ORDERS",
+                                      "to_schema": "SHOP", "to_table": "CUSTOMERS",
+                                      "on": ["CUSTOMER_ID = ID"]}, sch, _Counter())
+            case("a join ships in the warehouse's own case",
+                 j["condition_sql"]
+                 == '"shop"."orders"."customer_id" = "shop"."customers"."id"',
+                 str(j))
+            nav = _emit.nav_block(1, ["SHOP.ORDERS"], [])
+            case("the nav links the file a lower-case table is written to",
+                 "[shop.orders](../../tables/shop/orders.yml)" in nav, nav)
+        finally:
+            _emit.PHYSICAL.update({"tables": {}, "columns": {}})
+
         # --- the mapping warning names the models, not only the count ---
         # Clean-room: "131 of 254 repo records name a table outside schema.json"
         # named the class but not one member.
@@ -1189,6 +1323,17 @@ def kit_only_tests():
              and "internal" in str(finds[0].get("why"))
              and "M.DIM.IS_INTERNAL" in str(finds[0].get("why"))
              and "reword the" in str(finds[0].get("why")), str(finds)[:300])
+        joined = gate_population_rules(
+            {"readmes": {"README.md": "Rows exclude internal servers via the flag."},
+             "joins": [{"from_schema": "M", "from_table": "FACT",
+                        "to_schema": "M", "to_table": "DIM"}],
+             "tables": {"M.FACT": {"domain_path": ""}}},
+            {"M.DIM": {"IS_INTERNAL": "BOOLEAN"}, "M.FACT": {"X": ""}},
+            tmp / "no-evidence-dir")
+        case("a rule stated once above a table that joins to its flag is bound, "
+             "with no copy on the table",
+             finds[0]["unbound_count"] == 1 and joined[0]["unbound_count"] == 0,
+             str(joined)[:300])
 
 
 def port_tests():

@@ -496,6 +496,10 @@ def gate_population_rules(t, schema, evidence_dir: Path) -> list:
             if any(term in blob for term in terms):
                 continue  # locally bound
             d = hops(tab_name, carrier_tables)
+            # Stated once in the README above it and joined to the flag is
+            # bound: a copy on every table is a second home that drifts.
+            if d is not None:
+                continue
             u = usage.get(tab_name) or {}
             unbound.append({
                 "table": tab_name,

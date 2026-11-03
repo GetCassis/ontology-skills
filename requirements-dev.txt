@@ -13,7 +13,7 @@ duckdb>=1.0
 dbt-core>=1.9
 dbt-duckdb>=1.9
 
-# `cassis ontology check` is an optional integration. It needs cassis-cli
-# from its distribution channel plus CASSIS_API_KEY; the test SKIPs without
-# either. Keep it out of this file until it is available from the same Python
-# package index, so the documented fresh-clone test install remains reproducible.
+# `cassis context check` validates the emitted tree with the same checks a
+# Cassis pull request runs. It also needs CASSIS_API_KEY; the test SKIPs
+# without one, and on Python 3.9, which cassis-cli does not support.
+cassis-cli>=3.5; python_version >= "3.10"

@@ -8,7 +8,7 @@ which is deliberate, and a set of reports.
 | Directory | What it is |
 |---|---|
 | `<run>/cassis/` | The **working tree**. The run's stages assemble it, and the checks read it. It carries provenance on every column — where each description came from — which is how the metrics review can tell the warehouse's own words apart from prose drafted during the run |
-| `<run>/emit/cassis/` | The **ontology tree**, and the one to keep. `verify.py` checks it and needs nothing — no account, no network. It also happens to be the format `cassis ontology upload` imports as-is, if you ever want that |
+| `<run>/emit/cassis/` | The **ontology tree**, and the one to keep. `verify.py` checks it and needs nothing — no account, no network. It also happens to be the format `cassis context upload` imports as-is, if you ever want that |
 
 They are not interchangeable, and the working tree is not simply an earlier
 draft: the provenance keys that make it useful during the run are fields the
@@ -24,14 +24,16 @@ the emit is deterministic, free, and produces no diff when nothing changed.
 ```
 emit/
 ├── CLAUDE.md                       how to read the ontology (copied in for you)
-├── provenance.json                 per column: where its description came from
+├── provenance.json                 per column: where its description came from,
+│                                   and any left to the warehouse's own comment
 └── cassis/
     ├── domains/README.md           the root domain: what the warehouse is about,
     │                               and the rules that hold everywhere
     ├── domains/<path>/README.md     one domain — prose, then a generated block
     │                               linking the tables and metrics it owns
     ├── tables/<schema>/<table>.yml  one modeled table: grain, domain, and every
-    │                               column with description, unit and synonyms
+    │                               column with description, unit, synonyms and
+    │                               stored values
     ├── metrics/<name>.yml           one metric: expression, table, mandatory
     │                               filter, caveats folded into the description
     └── joins.yml                    every promoted join: column pairs,
@@ -41,7 +43,7 @@ emit/
 `CLAUDE.md` is the short reading order for whatever agent you point at the
 tree: root rules first, then the domain, then the table's grain, then prefer a
 defined metric over rebuilding one, and join only through `joins.yml`. It
-defers the modeling doctrine to `AGENTS.md`, which `cassis ontology fmt`
+defers the modeling doctrine to `AGENTS.md`, which `cassis context fmt`
 writes in if you install `cassis-cli`.
 
 ## The reports beside it

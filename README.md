@@ -96,9 +96,9 @@ there, we will keep a standalone version available. Run it and tell us where it 
 
 | Input | Why it is needed |
 |---|---|
-| A schema export: every table and column, from your information schema | Mandatory. It is what makes an invented column name impossible rather than merely catchable |
+| A schema export: every table and column, from your information schema | Mandatory. It is what makes an invented column name impossible rather than merely catchable. If the warehouse is already connected to Cassis, `cassis schema pull` writes one (`cassis/.schema.json`) that also carries the warehouse's primary keys, foreign keys and view definitions: they become grains, join candidates and defining SQL |
 | A dbt project, or a dbt docs export of one | Mandatory. Without defining SQL there is no grain, no join evidence, no unit |
-| A column glossary, your warehouse's own column comments, or dbt `{% docs %}` blocks | Optional, and the single biggest saving: these three go straight into the ontology in your own words, kept as written. A column glossary has to be handed over as one. Nothing harvests definitions out of prose, because a bold heading matching a column name is not evidence it defines that column |
+| A column glossary, your warehouse's own column comments, or dbt `{% docs %}` blocks | Optional, and the single biggest saving: these three go straight into the ontology in your own words, kept as written. A description that only repeats a warehouse comment is left to the comment in the shipped tree, because Cassis reads comments itself and two copies drift. A column glossary has to be handed over as one. Nothing harvests definitions out of prose, because a bold heading matching a column name is not evidence it defines that column |
 | Free-form documentation: a wiki export, reference docs, PDFs | Optional. It answers the run's blocking questions, and never fills in a column: for each question where a wrong answer makes a number wrong, retrieval pulls the passages that might answer it, an agent decides whether any of them does, and the candidate reaches you at the fourth checkpoint with the page and line it came from. You accept it or you do not. Applying prose to a column by name instead was measured on a 4,700-page public handbook: 8 columns filled, 8 wrong |
 | Dashboard or saved-question exports carrying SQL | Optional. Join evidence, usage ranking and metric corroboration at once |
 | A query log, if you can export one | Optional. Ranks what people actually query |
@@ -223,7 +223,7 @@ project this repo ships:
 schema_name: MAIN
 table_name: ORDERS
 domain_path: commerce
-description: One row per order placed in the store.
+description: Orders placed in the store.
 grain:
 - ORDER_ID
 columns:
@@ -231,8 +231,11 @@ columns:
   description: Primary key of the order, assigned by the storefront at checkout.
   data_type: VARCHAR
 - name: STATUS
-  description: 'Order lifecycle status: completed or cancelled.'
+  description: Order lifecycle status.
   data_type: VARCHAR
+  enum_values:
+  - value: completed
+  - value: cancelled
 - name: TOTAL_AMOUNT
   description: Order total in EUR, tax included. Cancelled orders keep their amount.
   unit: EUR
@@ -253,7 +256,7 @@ filter, a domain README, and the file tree of the whole emitted run), regenerabl
   `meta.cassis.join`.
 - Everything dbt has no field for (the domain hierarchy, synonyms, metric caveats) goes under
   `meta.cassis.*`, one documented namespace. With `persist_docs` on, the descriptions reach the
-  warehouse itself as column comments, where an agent querying it directly can see them.
+  warehouse itself as column comments, where any agent querying it can see them, Cassis included.
 
 Two limits, both measured:
 
@@ -315,13 +318,21 @@ first time somebody asks a question it cannot answer. Keeping that context true 
 moves is what [Cassis](https://getcassis.com) does: the same ontology, enriched from real use,
 with every change reviewed by the data team before it becomes truth.
 
-The output here is a Cassis ontology already, so there is nothing to migrate:
+The output here is a Cassis ontology already, so there is nothing to migrate. Cassis records the
+commit each version comes from, so the tree goes into a repository first:
 
 ```bash
 pip install cassis-cli
-cassis ontology upload --project <id> --no-publish   # review it in Cassis first
-cassis ontology fmt                                  # writes AGENTS.md into the checkout
+cd <run>/emit
+cassis context fmt          # Cassis's canonical file form, plus its modeling guide, cassis/AGENTS.md
+git init && git add cassis && git commit -m "Bootstrapped context"
+cassis context upload --project <id> --no-publish   # review it in Cassis first
 ```
+
+From there, dbt changes reach it from CI. `cassis dbt check` on a pull request lists the tables,
+columns, joins and metrics the change puts in doubt, with the context change each one needs.
+`cassis dbt push` after `dbt docs generate` on production sets the baseline those checks compare
+against, and a merged change that puts the context in doubt becomes an issue in Cassis.
 
 ## License
 

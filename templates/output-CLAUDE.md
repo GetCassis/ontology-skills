@@ -12,10 +12,10 @@ judgment call in it was reviewed by whoever ran the tool.
 |---|---|
 | `cassis/domains/README.md` | The root domain: what this warehouse is about, and the rules that hold everywhere (currency, tax, timezone, exclusions) |
 | `cassis/domains/<path>/README.md` | One domain. Its prose is the business meaning; the generated block at the bottom links the tables and metrics that live in it |
-| `cassis/tables/<schema>/<table>.yml` | One modeled table: its grain, its domain, and every column with a description, a unit and any synonyms |
+| `cassis/tables/<schema>/<table>.yml` | One modeled table: its grain, its domain, and every column with a description, a unit, any synonyms, and the values it stores when the set is known |
 | `cassis/metrics/<name>.yml` | One metric: the expression, the table it aggregates, its mandatory filter if it has one, and the caveats folded into its description |
 | `cassis/joins.yml` | Every join anyone should use, with the column pairs, the cardinality and the ready-made condition |
-| `provenance.json` | Per column, where its description came from — the warehouse, the repository, a glossary, or drafted from evidence during the run |
+| `provenance.json` | Per column, where its description came from — the warehouse, the repository, a glossary, or drafted from evidence during the run — and the text of any description left to the warehouse's own comment |
 
 ## How to read it before answering a question
 
@@ -28,7 +28,10 @@ judgment call in it was reviewed by whoever ran the tool.
    belong to it.
 3. **Read the table file before you name a column.** The grain says what one
    row is. A column's description carries the unit and the meaning; its
-   synonyms are what people call it out loud.
+   synonyms are what people call it out loud; its `enum_values` are every
+   value it stores, so filter with exactly those. A column with no
+   description may be described by the warehouse's own comment, which
+   Cassis reads directly; `provenance.json` holds that text.
 4. **If a metric exists, use it rather than rebuilding it.** Its expression
    and its filter are the definition someone signed off on. A metric with a
    filter is wrong without that filter.
@@ -40,7 +43,7 @@ judgment call in it was reviewed by whoever ran the tool.
 The modeling doctrine — how to decide what belongs in an ontology, what makes
 a description worth keeping, when a metric earns its place — is not in this
 file. It ships as `AGENTS.md`, written into this directory by
-`cassis ontology fmt` (`pip install cassis-cli`). Two documents describing the
+`cassis context fmt` (`pip install cassis-cli`). Two documents describing the
 same format drift apart, so this one stays descriptive and defers to that one.
 
 ## Trust

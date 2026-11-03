@@ -125,13 +125,16 @@ def cmd_packets(args):
         by_table.setdefault(r["table"].upper(), r)
     ev = ws / "evidence"
     # same bare-vs-qualified key normalization as skeleton.py
-    grains = {}
+    grains, grain_src = {}, {}
     if (ev / "grains.json").exists():
         _bare = {t.split(".", 1)[1].upper(): t for t in schema}
         for g in load_json(ev / "grains.json"):
             key = g["table"] if g["table"] in schema else _bare.get(g["table"].upper())
             if key:
                 grains[key] = g.get("columns")
+                grain_src[key] = ("warehouse primary key"
+                                  if g.get("source") == "warehouse primary key"
+                                  else "dbt tests")
     enums = {}
     if (ev / "enums.json").exists():
         for e in load_json(ev / "enums.json"):
@@ -186,6 +189,16 @@ def cmd_packets(args):
              "Where a model's SQL calls a project macro, the call is not the "
              "computation: the macro body at the end of this packet is. Read it "
              "before describing any column the call produces.",
+             "",
+             "Stored values live in a column's `enum_values`, never in its "
+             "description. Where the file already lists them, say what the "
+             "column means and give a value its own `description` only where "
+             "the material explains it. Add `enum_values` yourself only for a "
+             "complete set the material proves (a CHECK constraint, a full "
+             "distinct list); a partial list is worse than none. The grain lives "
+             "in `grain`, never as a \"one row per\" sentence. Both moves apply "
+             "to the owner's text too: take out the value list or the grain "
+             "sentence, and keep every other word.",
              ""]
         batch_macros = {}
         for tname in tables:
@@ -204,10 +217,14 @@ def cmd_packets(args):
                   f"- file to edit: `cassis/tables/{tname.replace('.', '/')}.yml`",
                   f"- columns: {len(cols)}"]
             if grains.get(tname):
-                L.append(f"- grain (from dbt tests): {grains[tname]}")
+                L.append(f"- grain (from {grain_src.get(tname, 'dbt tests')}): "
+                         f"{grains[tname]}")
             if tname in nonsummable:
                 L.append("- **non-summable**: stacks aggregation levels; do not sum blindly")
-            if rec:
+            if rec and not rec.get("dbt_model"):
+                L.append("- a warehouse view no repo model defines: its own "
+                         "definition below is the defining SQL")
+            elif rec:
                 L.append(f"- dbt model: `{rec['dbt_model']}` (layer: {rec.get('layer')}, "
                          f"materialization: {rec.get('materialization')})")
                 if rec.get("tests"):
@@ -228,7 +245,8 @@ def cmd_packets(args):
             t_enums = (enums.get(tname.upper())
                        or enums.get(tname.split(".", 1)[1].upper()) or [])
             if t_enums:
-                L += ["", "**Enum values found in the repo's own yml:**"]
+                L += ["", "**Stored values the project's accepted_values tests "
+                          "declare** (already in the file as `enum_values`):"]
                 for e in t_enums:
                     L.append(f"- `{e.get('column') or '(unnamed)'}`: "
                              f"{json.dumps(e.get('values'), ensure_ascii=False)}")

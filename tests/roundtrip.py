@@ -10,7 +10,7 @@ this kit was a self-check that agreed with itself:
                   `meta.cassis.*` blocks have to survive into
                   target/manifest.json. Asserting the yml we just wrote proves
                   nothing about whether dbt accepts it.
-  --emit cassis    `cassis ontology check` validates the tree, which is the
+  --emit cassis    `cassis context check` validates the tree, which is the
                   same check the Cassis PR gate runs. It needs CASSIS_API_KEY
                   and SKIPs without one; the structural assertions above it
                   run on any clone.
@@ -148,13 +148,12 @@ def build_run(tmp: Path):
              "order items, and products describe what is sold.\n\nAmounts are "
              "in EUR, tax included."),
             ("commerce/README.md", "Commerce",
-             "Orders and the lines inside them. An order is either completed "
-             "or cancelled, and a cancelled order keeps its amount."),
+             "Orders and the lines inside them. Revenue is counted on "
+             "completed orders: a cancelled order keeps its amount."),
             ("commerce/customers/README.md", "Customers",
-             "One row per person who signed up. Country is the signup "
-             "country, not a billing country."),
+             "People who signed up to the store."),
             ("catalog/README.md", "Catalog",
-             "What the store sells. One row per product.")):
+             "What the store sells.")):
         p = run / "cassis" / "domains" / path
         p.parent.mkdir(parents=True, exist_ok=True)
         p.write_text(f"# {title}\n\n{prose}\n")
@@ -165,8 +164,13 @@ def build_run(tmp: Path):
          (r.stdout + r.stderr)[-300:])
 
     # --- stand-in for stage C: drafted columns, and the metrics ---
+    # The two edits the owner's own text takes: its value list moves into
+    # `enum_values` (the accepted_values test already put it there), and the
+    # "one row per" sentence goes, because `grain` says it.
+    owner_moves = {"description": "Orders placed in the store."}
     drafted = {
         "MAIN/ORDERS.yml": {
+            "STATUS": {"description": "Order lifecycle status."},
             "TOTAL_AMOUNT": {"description": "Order total in EUR, tax "
                                             "included. Cancelled orders keep "
                                             "their amount.",
@@ -184,6 +188,8 @@ def build_run(tmp: Path):
     for rel, cols in drafted.items():
         p = run / "cassis" / "tables" / rel
         doc = yaml.safe_load(p.read_text())
+        if rel == "MAIN/ORDERS.yml":
+            doc.update(owner_moves)
         for c in doc["columns"]:
             if c["name"] in cols:
                 c.update(cols[c["name"]])
@@ -243,6 +249,27 @@ def cassis_emit_tests(tmp: Path, ws: Path, run: Path):
     case("stripped provenance is moved to provenance.json, not dropped",
          prov["MAIN.ORDERS"]["TOTAL_AMOUNT"]["description_source"] == "drafted"
          and "COUNTRY_CODE" in prov["MAIN.CUSTOMERS"], str(prov)[:160])
+    status = next(c for c in orders["columns"] if c["name"] == "STATUS")
+    case("an accepted_values test ships as enum_values, and the description "
+         "says what the column means without listing them",
+         status.get("enum_values") == [{"value": "completed"},
+                                       {"value": "cancelled"}]
+         and status.get("description") == "Order lifecycle status.",
+         str(status)[:200])
+    case("the grain lives in `grain`, not in a sentence",
+         orders.get("grain") == ["ORDER_ID"]
+         and "row per" not in (orders.get("description") or ""),
+         str(orders)[:200])
+    customers = yaml.safe_load(
+        (out / "tables" / "MAIN" / "CUSTOMERS.yml").read_text())
+    country = next(c for c in customers["columns"]
+                   if c["name"] == "COUNTRY_CODE")
+    case("a description that only repeats the warehouse comment is left to "
+         "the comment, which Cassis reads itself; the text stays on record",
+         "description" not in country and country.get("synonyms") == ["country"]
+         and prov["MAIN.CUSTOMERS"]["COUNTRY_CODE"][
+             "deferred_to_warehouse_comment"]
+         == "Two-letter country code from signup.", str(country)[:200])
 
     # Without cassis-cli there is no AGENTS.md in the output, so the tree
     # arrives as YAML nobody has been told how to read. The reader guide
@@ -277,7 +304,7 @@ def cassis_emit_tests(tmp: Path, ws: Path, run: Path):
     readme = (out / "domains" / "commerce" / "customers" / "README.md").read_text()
     case("a domain README gets the frontmatter and a nav region at its own depth",
          readme.startswith("---\ntype: Domain\n")
-         # unquoted where YAML allows it, which is how `cassis ontology fmt`
+         # unquoted where YAML allows it, which is how `cassis context fmt`
          # writes it — so a later fmt leaves no diff at all
          and "title: Customers\n" in readme
          and "[MAIN.CUSTOMERS](../../../tables/MAIN/CUSTOMERS.yml)" in readme
@@ -327,9 +354,9 @@ def cassis_emit_tests(tmp: Path, ws: Path, run: Path):
 def cassis_check_tests(run: Path):
     """The hard postcondition: the tree the kit produces has to pass the same
     check the Cassis PR gate runs, or the documented upgrade path
-    (`cassis ontology upload`) is broken and nobody finds out until a stranger
+    (`cassis context upload`) is broken and nobody finds out until a stranger
     tries it."""
-    name = "the emitted tree passes `cassis ontology check`"
+    name = "the emitted tree passes `cassis context check`"
     if not shutil.which("cassis"):
         return skip(name, "cassis-cli not installed (pip install cassis-cli)")
     if not os.environ.get("CASSIS_API_KEY"):
@@ -338,7 +365,7 @@ def cassis_check_tests(run: Path):
     # An unbound checkout is the point: this validates the FORMAT, and binding
     # a project would add source-schema warnings about a fixture warehouse.
     env.pop("CASSIS_PROJECT_ID", None)
-    r = subprocess.run(["cassis", "ontology", "check", str(run / "emit")],
+    r = subprocess.run(["cassis", "context", "check", str(run / "emit")],
                        capture_output=True, text=True, env=env)
     case(name, r.returncode == 0, (r.stdout + r.stderr)[-500:])
 

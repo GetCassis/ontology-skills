@@ -9,7 +9,10 @@ normalized corpora (`workspace/questions.csv`, `workspace/dashboard_queries.csv`
 Everything in it is a CANDIDATE with provenance, not a truth.
 
 - **Evidence files.** `enums.json` and `grains.json` come from the transformation repo's own
-  tests and yml. `join_candidates.json` is mined from every SQL corpus with occurrence counts.
+  tests and yml, plus the primary keys a schema export declares. Each `enums.json` set is an
+  accepted_values test, a complete set, so it is already in the table shells as `enum_values`.
+  `join_candidates.json` is mined from every SQL corpus with occurrence counts, plus the foreign
+  keys a schema export declares (provenance `warehouse_fk`).
   `metric_candidates.json` is every aggregate expression appearing ≥3 times in production
   queries, with counts and source ids. `usage.json` ranks tables by how often analysts actually
   query them — spend description depth accordingly. `usage_out_of_scope.json` lists tables
@@ -38,10 +41,12 @@ Everything in it is a CANDIDATE with provenance, not a truth.
   passthrough as disqualifying. Withhold when the DEFINITION is a guess, not when the upstream
   pipeline is opaque.
 
-- **Population rules must be bound, not just stated.** Any default exclusion or population
-  filter you state in a domain README must also be stated on every high-usage table
-  (`usage.json`) whose numbers it changes, and `joins.yml` must give those tables a path to the
-  column that carries the flag — or the gap goes in QUESTIONS.md.
+- **Population rules must be bound, not just stated.** A default exclusion or population filter
+  lives once, at the layer that owns it: on the table's description when it governs one table,
+  in the domain README when it spans several. Every high-usage table (`usage.json`) whose numbers
+  it changes must be able to reach it: the table sits under that README, and `joins.yml` gives it
+  a path to the column that carries the flag — or the gap goes in QUESTIONS.md. Restating the
+  rule on every table makes copies that drift.
 
 - **Tree first.** Before writing any table file, write the complete domain tree (all READMEs
   with frontmatter) and a `TREE.md` at the workspace root summarizing it — one line per domain
@@ -129,7 +134,10 @@ your own team, kept as written. What it saved follows from that and is never the
     live here), and a `decisions/domains.yml` assigning every table. This is the judgment that
     cannot be parallelised and cannot be cheapened; everything downstream reads it.
   - **B2 (Sonnet, parallel by domain or hub table):** disposition every `joins_draft.yml` entry
-    into promote-or-reject-with-reason, and ship corroborated metrics. Both are bounded judgments
+    into promote-or-reject-with-reason, and ship corroborated metrics. A `warehouse_fk` candidate
+    is a constraint the warehouse declares: promote it unless the scope leaves a side out. Cassis
+    seeds the same joins when it reads the warehouse, and an uploaded tree replaces the
+    project's joins, so a declared one left out is a join the upload removes. Both are bounded judgments
     against a written rule, and both fan out. On benchmark C, B as one Opus agent took 34 minutes — half
     of a whole single-pass baseline run — for work that is mostly this.
   - A script applies the result: `apply_synthesis.py` validates the decisions against the real

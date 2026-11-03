@@ -78,10 +78,9 @@ def load_schema_any(path: Path) -> tuple:
                 if note:
                     comments.setdefault(t, {})[col] = note
     else:
-        data = json.load(open(path))
-        tables = data.get("tables", data) if isinstance(data, dict) else data
-        for t in tables:
-            key = f"{str(t.get('schema_name', '')).upper()}.{str(t['name']).upper()}"
+        for t in _json_tables(path):
+            sch, name = _json_table_name(t)
+            key = f"{sch.upper()}.{name.upper()}"
             schema[key] = {}
             for c in t.get("columns") or []:
                 col = str(c["name"]).upper()
@@ -91,8 +90,18 @@ def load_schema_any(path: Path) -> tuple:
                     comments.setdefault(key, {})[col] = note
                 if c.get("is_primary_key"):
                     keys.setdefault(key, []).append(col)
-            if t.get("description"):
-                comments.setdefault(key, {})["__table__"] = str(t["description"]).strip()
+            for col in t.get("primary_key") or []:
+                if str(col).upper() not in keys.get(key, []):
+                    keys.setdefault(key, []).append(str(col).upper())
+            # `cassis schema pull` keeps the warehouse's own table comment in
+            # `source_comment`; its `description` is the Cassis context's, which
+            # is somebody's later authoring, not the warehouse. Falling back to it
+            # when the warehouse has none deferred the context's own text to a
+            # comment that does not exist, and the upload then erased it.
+            note = (t.get("source_comment") if "source_comment" in t
+                    else t.get("description"))
+            if note:
+                comments.setdefault(key, {})["__table__"] = str(note).strip()
     # A type column that exists but is empty is a silent data-quality hole in
     # THEIR export, not a formatting variant: one real export carried 3,399
     # rows with data_type blank on every one, and only a hand diff against a
@@ -107,6 +116,95 @@ def load_schema_any(path: Path) -> tuple:
               f"mining) degrades — if another export of this warehouse carries "
               f"types, prefer it.")
     return schema, comments, keys
+
+
+def _json_tables(path: Path) -> list:
+    data = json.load(open(path))
+    return data.get("tables", data) if isinstance(data, dict) else data
+
+
+def _json_table_name(t: dict) -> tuple:
+    """-> (schema, table) in the warehouse's own case.
+
+    `cassis schema pull` writes `name: SCHEMA.TABLE` with no `schema_name`;
+    other exports split the two. Reading only the split form keyed every table
+    of a pulled snapshot `.SCHEMA.TABLE`, which then matched nothing.
+    """
+    name = str(t.get("table_name") or t["name"])
+    sch = str(t.get("schema_name") or t.get("table_schema") or "")
+    if not sch and "." in name:
+        sch, name = name.split(".")[-2:]
+    return sch, name
+
+
+def load_schema_physical(path: Path) -> dict:
+    """The warehouse's own case for every table and column whose name is not
+    already upper case, keyed the way the rest of the kit keys them.
+
+    Everything downstream matches on upper case, which is right for matching
+    and wrong for what ships: a Cassis identifier is physical, and quoted
+    identifiers are case-sensitive in Postgres and BigQuery. Emit puts these
+    back. Empty for a Snowflake export, whose names are upper case already.
+    """
+    tables: dict[str, list] = {}
+    columns: dict[str, dict] = {}
+    if path.suffix == ".csv":
+        with open(path) as f:
+            rdr = csv.DictReader(f)
+            fields = {str(h).strip().upper(): h for h in (rdr.fieldnames or [])}
+
+            def g(row, name):
+                h = fields.get(name)
+                return (row.get(h) or "") if h else ""
+
+            rows = [(g(r, "TABLE_SCHEMA"), g(r, "TABLE_NAME"), g(r, "COLUMN_NAME"))
+                    for r in rdr]
+    else:
+        rows = []
+        for t in _json_tables(path):
+            sch, name = _json_table_name(t)
+            rows += [(sch, name, str(c["name"])) for c in t.get("columns") or []]
+            if not t.get("columns"):
+                rows.append((sch, name, ""))
+    for sch, name, col in rows:
+        key = f"{sch.upper()}.{name.upper()}"
+        if f"{sch}.{name}" != key:
+            tables[key] = [sch, name]
+        if col and col != col.upper():
+            columns.setdefault(key, {})[col.upper()] = col
+    return {"tables": tables, "columns": columns} if tables or columns else {}
+
+
+def load_schema_relations(path: Path, known: set) -> tuple:
+    """-> (foreign_keys, view_definitions) from a JSON schema export.
+
+    `cassis schema pull` carries the constraints and view SQL the warehouse
+    declares. A declared foreign key is a join the owner already stated, and a
+    view's SQL is its defining SQL when no repo models it. CSV exports carry
+    neither, and return empty.
+    """
+    if path.suffix == ".csv":
+        return [], {}
+    fks: dict[tuple, dict] = {}
+    views: dict[str, str] = {}
+    for t in _json_tables(path):
+        sch, name = _json_table_name(t)
+        left = f"{sch.upper()}.{name.upper()}"
+        for fk in t.get("foreign_keys") or []:
+            ref_sch = str(fk.get("references_schema") or sch).upper()
+            right = f"{ref_sch}.{str(fk.get('references_table', '')).upper()}"
+            if left not in known or right not in known:
+                continue
+            group = fk.get("constraint_name") or f"{fk.get('column')}->{right}"
+            entry = fks.setdefault((left, right, group), {
+                "left": left, "right": right, "on": [],
+                "constraint": fk.get("constraint_name")})
+            entry["on"].append(f"{str(fk['column']).upper()} = "
+                               f"{str(fk['references_column']).upper()}")
+        ttype = str(t.get("table_type") or "").upper()
+        if "VIEW" in ttype and str(t.get("definition") or "").strip():
+            views[left] = str(t["definition"]).strip()
+    return list(fks.values()), views
 
 
 # ---------- BI corpora ----------
@@ -382,6 +480,13 @@ def main():
               f"{sum(len(v) for v in declared_keys.values())} on "
               f"{len(declared_keys)} tables")
     known = set(schema)
+    physical = load_schema_physical(args.schema)
+    if physical:
+        dump_json(physical, ws / "physical_names.json")
+    declared_fks, view_sql = load_schema_relations(args.schema, known)
+    if declared_fks:
+        dump_json(declared_fks, ws / "declared_foreign_keys.json")
+        print(f"foreign keys declared in the schema export: {len(declared_fks)}")
     print(f"schema: {len(schema)} tables, "
           f"{sum(len(v) for v in schema.values())} columns")
 
@@ -422,8 +527,6 @@ def main():
     # linker silently drops the record — one warehouse read 35 of 427 tables
     # until this mapping existed. Only unambiguous mappings apply; the rest WARN.
     mapped, collisions = map_records_to_schema(records, schema)
-    dump_json({"adapter": adapter, "records": records, **extra},
-              ws / "repo" / "tables.json")
     with_sql = sum(1 for r in records if r.get("sql"))
     reaching = sum(1 for r in records if r.get("table") in schema)
     print(f"repo ({adapter}): {len(records)} tables, {with_sql} with SQL, "
@@ -451,6 +554,23 @@ def main():
             f"different database than the project builds into, or the "
             f"project's models land in schemas the export does not cover. "
             f"Check one table you know is in both.")
+    # A view no repo model defines still has defining SQL: the warehouse's own.
+    covered = {str(r.get("table") or "").upper() for r in records}
+    n_views = 0
+    for key, sql in sorted(view_sql.items()):
+        if key in covered or key.split(".", 1)[1] in covered:
+            continue
+        records.append({"table": key, "layer": "view", "sql": sql,
+                        "sql_path": None, "yml_path": None, "macro_calls": [],
+                        "description": "", "caveats": "", "granularity": [],
+                        "column_descriptions": {}, "enums": {},
+                        "source": "warehouse view definition"})
+        n_views += 1
+    if n_views:
+        print(f"view definitions from the schema export: {n_views} views no "
+              f"repo model defines carry their own SQL as defining SQL")
+    dump_json({"adapter": adapter, "records": records, **extra},
+              ws / "repo" / "tables.json")
 
     if args.questions_dir:
         rows = ingest_questions(args.questions_dir, known)

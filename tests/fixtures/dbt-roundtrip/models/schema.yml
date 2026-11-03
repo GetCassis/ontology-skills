@@ -20,6 +20,10 @@ models:
           - not_null
       - name: status
         description: "Order lifecycle status: completed or cancelled."
+        data_tests:
+          - accepted_values:
+              arguments:
+                values: ['completed', 'cancelled']
       - name: total_amount
       - name: placed_at
 

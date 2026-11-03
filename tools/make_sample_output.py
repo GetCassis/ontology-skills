@@ -6,7 +6,7 @@ under tests/fixtures/dbt-roundtrip goes through the kit's own deterministic
 chain (ingest -> evidence -> skeleton -> prefill -> apply_synthesis -> emit),
 exactly as tests/roundtrip.py drives it. The enrichment stages are agent work,
 so their output is stood in for by the suite's fixtures — the same stand-ins
-the round-trip test ships through `dbt parse` and `cassis ontology check`.
+the round-trip test ships through `dbt parse` and `cassis context check`.
 
 Committed because a reader deciding whether to run the kit believes a file
 tree and fifteen lines of the real thing, not adjectives. Regenerate after
@@ -41,7 +41,7 @@ Real output of a run, not a mock-up: the four-model fixture project in
 `tests/fixtures/dbt-roundtrip` taken through the kit's deterministic chain,
 with the enrichment stages stood in for by the test suite's fixtures (enrichment
 is agent work, so a committed sample uses the same stand-ins the round-trip
-test hands to `dbt parse` and `cassis ontology check`). Regenerate with
+test hands to `dbt parse` and `cassis context check`). Regenerate with
 `python3 tools/make_sample_output.py`.
 
 A real run's tree looks exactly like this, with more of everything. The full

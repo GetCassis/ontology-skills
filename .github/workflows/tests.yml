@@ -16,7 +16,7 @@ jobs:
         run: pip install -r requirements-dev.txt
       # The dbt export's test runs dbt itself over the merged project, so this
       # job is where "dbt accepts our output" is actually established. Without
-      # CASSIS_API_KEY the `cassis ontology check` case SKIPs and the rest still
+      # CASSIS_API_KEY the `cassis context check` case SKIPs and the rest still
       # runs — a fresh clone with no secret gets a green suite, not a red one.
       - name: Kit tests, including the export round trips
         env:

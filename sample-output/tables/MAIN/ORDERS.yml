@@ -1,7 +1,7 @@
 schema_name: MAIN
 table_name: ORDERS
 domain_path: commerce
-description: One row per order placed in the store.
+description: Orders placed in the store.
 grain:
 - ORDER_ID
 columns:
@@ -14,8 +14,11 @@ columns:
 - name: PLACED_AT
   data_type: TIMESTAMP
 - name: STATUS
-  description: 'Order lifecycle status: completed or cancelled.'
+  description: Order lifecycle status.
   data_type: VARCHAR
+  enum_values:
+  - value: completed
+  - value: cancelled
 - name: TOTAL_AMOUNT
   description: Order total in EUR, tax included. Cancelled orders keep their amount.
   unit: EUR

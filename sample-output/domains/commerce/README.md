@@ -6,7 +6,7 @@ description: Orders and the lines inside them.
 
 # Commerce
 
-Orders and the lines inside them. An order is either completed or cancelled, and a cancelled order keeps its amount.
+Orders and the lines inside them. Revenue is counted on completed orders: a cancelled order keeps its amount.
 
 <!-- cassis:nav:begin (generated, do not edit) -->
 

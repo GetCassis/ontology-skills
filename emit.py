@@ -9,7 +9,7 @@ Neither touches the working tree at `<run>/cassis/`, and neither touches
 QUESTIONS.md — that file is a deliverable for a person, not for a parser.
 
 `cassis` — the ontology tree, the standalone result. It is also the format
-`cassis ontology upload` imports, for anyone who later wants that; nothing here
+`cassis context upload` imports, for anyone who later wants that; nothing here
 requires it. The working tree is NOT that format, measured against cassis-cli
 1.5.0: four things differ.
 
@@ -50,7 +50,7 @@ KIT = Path(__file__).resolve().parent
 
 PROVENANCE_KEYS = ("description_source", "description_source_detail")
 CANON_COLUMN_KEYS = ("name", "description", "unit", "synonyms", "data_type",
-                     "nullable", "ordinal")
+                     "nullable", "ordinal", "enum_values")
 CANON_TABLE_KEYS = ("schema_name", "table_name", "domain_path", "description",
                     "synonyms", "grain", "columns", "sql")
 CANON_METRIC_KEYS = ("name", "display_name", "domain_path", "table_schema",
@@ -89,6 +89,28 @@ def read_working_tree(run: Path) -> dict:
     return t
 
 
+# The warehouse's own case for names the kit upper-cases to match on, from
+# ingest's physical_names.json. Empty for a Snowflake export.
+PHYSICAL: dict = {"tables": {}, "columns": {}}
+
+
+def load_physical(ws: Path) -> None:
+    p = ws / "physical_names.json"
+    if p.exists():
+        PHYSICAL.update(load_json(p))
+
+
+def physical_table(key: str) -> tuple:
+    """(schema, table) as the warehouse stores them: what Cassis matches on."""
+    hit = PHYSICAL["tables"].get(str(key).upper())
+    return tuple(hit) if hit else tuple(str(key).split(".", 1))
+
+
+def physical_column(key: str, column: str) -> str:
+    return (PHYSICAL["columns"].get(str(key).upper()) or {}).get(
+        str(column).upper(), column)
+
+
 def schema_case(schema: dict, table: str, column: str) -> str:
     """The column's PHYSICAL casing, from the schema export.
 
@@ -110,29 +132,66 @@ def display_name_for(name: str) -> str:
     return (s[0].upper() + s[1:]) if s else str(name)
 
 
+def same_text(a, b) -> bool:
+    return " ".join(str(a or "").split()) == " ".join(str(b or "").split())
+
+
+def canonical_enum_values(raw, dropped: Counter) -> list:
+    """`enum_values` as Cassis reads it: text values, each once, author's order."""
+    out, seen = [], set()
+    for item in raw or []:
+        item = item if isinstance(item, dict) else {"value": item}
+        value = item.get("value")
+        if value is None or str(value) == "" or str(value) in seen:
+            continue
+        seen.add(str(value))
+        ev = {"value": str(value)}
+        if str(item.get("description") or "").strip():
+            ev["description"] = str(item["description"]).strip()
+        out.append(ev)
+    if len(out) > 200:
+        dropped["columns[].enum_values (over 200 values: not categorical)"] += 1
+        return []
+    return out
+
+
 def canonical_table(key: str, tab: dict, schema: dict, dropped: Counter,
-                    provenance: dict) -> dict:
-    sch, name = key.split(".", 1)
+                    provenance: dict, comments: dict = None) -> dict:
+    """`comments` holds the warehouse's own table and column comments. Cassis
+    reads those itself wherever the context has no description, so a
+    description that only repeats one is left out: two copies drift, and a
+    corrected comment would never reach the agent past the stale copy."""
+    sch, name = physical_table(key)
     out = {"schema_name": sch, "table_name": name,
            "domain_path": tab.get("domain_path")}
     for k in ("description", "synonyms", "grain", "sql"):
         if tab.get(k):
             out[k] = tab[k]
+    wc = (comments or {}).get(key) or {}
+    if out.get("description") and same_text(out["description"], wc.get("__table__")):
+        provenance.setdefault(key, {})["__table__"] = {
+            "deferred_to_warehouse_comment": out.pop("description")}
     if out.get("grain"):
-        out["grain"] = [schema_case(schema, key, g) for g in out["grain"]]
+        out["grain"] = [physical_column(key, schema_case(schema, key, g))
+                        for g in out["grain"]]
     types = schema.get(key) or {}
     cols = []
     for c in tab.get("columns") or []:
         if not isinstance(c, dict) or not c.get("name"):
             continue
         cname = schema_case(schema, key, c["name"])
-        oc = {"name": cname}
+        oc = {"name": physical_column(key, cname)}
         for k in ("description", "unit", "synonyms"):
             if c.get(k):
                 oc[k] = c[k]
         if types.get(cname):
             oc["data_type"] = types[cname]
+        enum_values = canonical_enum_values(c.get("enum_values"), dropped)
+        if enum_values:
+            oc["enum_values"] = enum_values
         src = {k: c[k] for k in PROVENANCE_KEYS if c.get(k)}
+        if oc.get("description") and same_text(oc["description"], wc.get(cname)):
+            src["deferred_to_warehouse_comment"] = oc.pop("description")
         if src:
             provenance.setdefault(key, {})[cname] = src
         for k in c:
@@ -159,6 +218,8 @@ def canonical_metric(name: str, m: dict, tables: dict, dropped: Counter) -> dict
               "synonyms", "description", "precomputed_in"):
         if m.get(k):
             out[k] = m[k]
+    if out.get("table_schema") and out.get("table_name"):
+        out["table_schema"], out["table_name"] = physical_table(tkey)
     # `notes` is what some enrichment passes called the human half of a caveat.
     # Fold it into the description rather than drop it: description is the only
     # field every consumer reads.
@@ -179,22 +240,23 @@ def canonical_join(j: dict, schema: dict, dropped: Counter):
     fk = f"{j.get('from_schema')}.{j.get('from_table')}"
     tk = f"{j.get('to_schema')}.{j.get('to_table')}"
     pairs = []
+    def col(tkey, c):
+        return physical_column(tkey, schema_case(schema, tkey, c))
+
     for entry in (j.get("column_pairs") or []):
         if isinstance(entry, dict) and entry.get("from_column"):
-            pairs.append({"from_column": schema_case(schema, fk,
-                                                     entry["from_column"]),
-                          "to_column": schema_case(schema, tk,
-                                                   entry.get("to_column", ""))})
+            pairs.append({"from_column": col(fk, entry["from_column"]),
+                          "to_column": col(tk, entry.get("to_column", ""))})
     for clause in (j.get("on") or []):
         if "=" not in str(clause):
             continue
         left, right = [c.strip() for c in str(clause).split("=", 1)]
-        pairs.append({"from_column": schema_case(schema, fk, left),
-                      "to_column": schema_case(schema, tk, right)})
+        pairs.append({"from_column": col(fk, left),
+                      "to_column": col(tk, right)})
     if not pairs:
         return None
-    fs, ft = fk.split(".", 1)
-    ts, tt = tk.split(".", 1)
+    fs, ft = physical_table(fk)
+    ts, tt = physical_table(tk)
     out = {"from_schema": fs, "from_table": ft, "to_schema": ts, "to_table": tt,
            "column_pairs": pairs,
            "condition_sql": " AND ".join(
@@ -215,9 +277,9 @@ def nav_block(depth: int, tables: list, metrics: list) -> str:
     lines = [NAV_BEGIN, ""]
     if tables:
         lines.append("## Tables")
-        for key in sorted(tables):
-            sch, name = key.split(".", 1)
-            lines.append(f"- [{key}]({up}tables/{sch}/{name}.yml)")
+        # sorted as the files are named, the order `cassis context fmt` writes
+        for sch, name in sorted(physical_table(k) for k in tables):
+            lines.append(f"- [{sch}.{name}]({up}tables/{sch}/{name}.yml)")
         lines.append("")
     if metrics:
         lines.append("## Metrics")
@@ -271,7 +333,7 @@ def domain_readme(rel: str, text: str, tables: list, metrics: list) -> str:
     return "\n".join(parts).rstrip() + "\n"
 
 
-def emit_cassis(run: Path, tree: dict, schema: dict) -> int:
+def emit_cassis(run: Path, tree: dict, schema: dict, comments: dict = None) -> int:
     out_root = run / "emit" / "cassis"
     dropped, provenance = Counter(), {}
 
@@ -285,7 +347,7 @@ def emit_cassis(run: Path, tree: dict, schema: dict) -> int:
 
     n_t = 0
     for key, tab in sorted(tree["tables"].items()):
-        rec = canonical_table(key, tab, schema, dropped, provenance)
+        rec = canonical_table(key, tab, schema, dropped, provenance, comments)
         p = out_root / "tables" / rec["schema_name"] / f"{rec['table_name']}.yml"
         p.parent.mkdir(parents=True, exist_ok=True)
         p.write_text(yaml.safe_dump(rec, sort_keys=False, allow_unicode=True,
@@ -356,6 +418,12 @@ def emit_cassis(run: Path, tree: dict, schema: dict) -> int:
     if provenance:
         print(f"  description provenance moved out of the shipped tree "
               f"(Cassis would reject the fields) -> emit/provenance.json")
+    deferred = sum(1 for cols in provenance.values() for src in cols.values()
+                   if "deferred_to_warehouse_comment" in src)
+    if deferred:
+        print(f"  {deferred} description(s) left to the warehouse's own comment, "
+              f"which Cassis reads wherever the tree has none; the text is in "
+              f"emit/provenance.json (--keep-warehouse-comments copies it in)")
     if dropped:
         print("  fields dropped as not part of the Cassis format — check none "
               "of these carried content:")
@@ -976,12 +1044,20 @@ def main():
     ap.add_argument("--workspace", type=Path, required=True)
     ap.add_argument("--dbt-project", type=Path,
                     help="the dbt project the run ingested (--emit dbt)")
+    ap.add_argument("--keep-warehouse-comments", action="store_true",
+                    help="copy descriptions that only repeat a warehouse "
+                         "comment into the tree, for a reader that never sees "
+                         "the warehouse's comments (Cassis reads them itself)")
     args = ap.parse_args()
 
     tree = read_working_tree(args.run)
     schema = load_json(args.workspace / "schema.json")
+    load_physical(args.workspace)
     if args.emit == "cassis":
-        return emit_cassis(args.run, tree, schema)
+        cc = args.workspace / "column_comments.json"
+        comments = (load_json(cc) if cc.exists()
+                    and not args.keep_warehouse_comments else {})
+        return emit_cassis(args.run, tree, schema, comments)
     if not args.dbt_project:
         die("--emit dbt needs --dbt-project <the dbt project you ingested>")
     return emit_dbt(args.run, args.workspace, tree, schema, args.dbt_project)

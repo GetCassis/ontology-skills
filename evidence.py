@@ -269,6 +269,18 @@ def main():
         if r.get("granularity"):
             grains.append({"id": fact_id("grain", t), "table": t,
                            "columns": r["granularity"], "source": r.get("yml_path")})
+    # A primary key the warehouse declares is a grain the owner stated. The
+    # repo's own test wins where both exist; ingest wrote these and, until
+    # now, nothing read them.
+    dk = ws / "declared_keys.json"
+    if dk.exists():
+        have = {g["table"] for g in grains} | {
+            qualify(g["table"]) for g in grains if qualify(g["table"])}
+        for t, cols in sorted(load_json(dk).items()):
+            if t not in have and cols:
+                grains.append({"id": fact_id("grain", t), "table": t,
+                               "columns": cols,
+                               "source": "warehouse primary key"})
     dump_json(enums, ev / "enums.json")
     dump_json(grains, ev / "grains.json")
 
@@ -310,6 +322,18 @@ def main():
                         ("from_model", "to_model", "model", "target",
                          "from_column", "to_column", "reason", "source") if rel.get(k)},
             })
+    # Foreign keys the warehouse declares (a `cassis schema pull` snapshot
+    # carries them). Cassis seeds the same joins when it introspects, and an
+    # uploaded tree replaces the project's joins, so one left out here is a
+    # join the upload removes.
+    dfk = ws / "declared_foreign_keys.json"
+    if dfk.exists():
+        for fk in load_json(dfk):
+            joins.append({"id": fact_id("join", "fk", fk["left"], fk["right"],
+                                        str(fk.get("constraint"))),
+                          "left": fk["left"], "right": fk["right"],
+                          "on": fk["on"], "provenance": "warehouse_fk",
+                          "sources": [fk.get("constraint") or "declared"]})
     joins += mine_shared_key_joins(schema, grains,
                                    {(j.get("left"), j.get("right")) for j in joins})
     dump_json(joins, ev / "join_candidates.json")

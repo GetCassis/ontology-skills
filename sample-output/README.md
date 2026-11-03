@@ -4,7 +4,7 @@ Real output of a run, not a mock-up: the four-model fixture project in
 `tests/fixtures/dbt-roundtrip` taken through the kit's deterministic chain,
 with the enrichment stages stood in for by the test suite's fixtures (enrichment
 is agent work, so a committed sample uses the same stand-ins the round-trip
-test hands to `dbt parse` and `cassis ontology check`). Regenerate with
+test hands to `dbt parse` and `cassis context check`). Regenerate with
 `python3 tools/make_sample_output.py`.
 
 A real run's tree looks exactly like this, with more of everything. The full

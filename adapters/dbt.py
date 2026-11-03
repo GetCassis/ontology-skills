@@ -85,6 +85,41 @@ def collect_macros(root: Path) -> dict:
     return macros
 
 
+def accepted_values_from_yml(root: Path) -> dict:
+    """{model_name: {COL: [values]}} from the project's own accepted_values tests.
+
+    Read from source because the vendored parser joins the values with commas
+    (so a value containing one splits) and reads only the legacy `values:` key:
+    dbt 1.10+ puts it under `arguments:`, and a current project's sets arrive
+    empty.
+    """
+    import yaml
+    out: dict[str, dict] = {}
+    for yml in list(root.rglob("*.yml")) + list(root.rglob("*.yaml")):
+        try:
+            doc = yaml.safe_load(yml.read_text(errors="replace")) or {}
+        except (yaml.YAMLError, OSError):
+            continue
+        models = doc.get("models") if isinstance(doc, dict) else None
+        for model in models if isinstance(models, list) else []:
+            if not isinstance(model, dict) or not model.get("name"):
+                continue
+            for col in model.get("columns") or []:
+                if not isinstance(col, dict) or not col.get("name"):
+                    continue
+                for t in (col.get("data_tests") or []) + (col.get("tests") or []):
+                    cfg = t.get("accepted_values") if isinstance(t, dict) else None
+                    if not isinstance(cfg, dict):
+                        continue
+                    vals = (cfg.get("arguments") or {}).get("values") or cfg.get("values")
+                    # booleans are not a categorical set, and YAML's True is
+                    # not what the warehouse stores
+                    if vals and not any(isinstance(v, bool) for v in vals):
+                        out.setdefault(model["name"], {})[
+                            str(col["name"]).upper()] = [str(v) for v in vals]
+    return out
+
+
 def detect(root: Path) -> bool:
     return (root / "dbt_project.yml").exists()
 
@@ -120,6 +155,7 @@ def parse(root: Path) -> list[dict]:
         cols_by_model.setdefault(c.get("model"), []).append(c)
 
     macros = collect_macros(root)
+    accepted = accepted_values_from_yml(root)
     out = []
     for m in inv.get("models") or []:
         name = m.get("name") or ""
@@ -140,6 +176,8 @@ def parse(root: Path) -> list[dict]:
         # including columns inventory never listed at all
         for cu, cd in (src.get("columns") or {}).items():
             descriptions.setdefault(cu, cd)
+        enums = {cu: v for cu, v in enums.items() if v}
+        enums.update(accepted.get(name) or {})
         pk = m.get("pk_column")
         model_sql = _read_sql(root, m.get("sql_path"))
         out.append({

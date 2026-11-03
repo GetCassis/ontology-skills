@@ -26,6 +26,10 @@ import yaml
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from common import die, dump_json, load_json, load_scope
 
+# Cassis refuses a column with more stored values than this; past it the column
+# is not categorical, and its values stay evidence rather than `enum_values`.
+MAX_ENUM_VALUES = 200
+
 
 def main():
     ap = argparse.ArgumentParser()
@@ -75,6 +79,18 @@ def main():
             key = g["table"] if g["table"] in schema else bare.get(g["table"].upper())
             if key:
                 grains[key] = g["columns"]
+    # An accepted_values test declares the complete set a column may hold, which
+    # is what `enum_values` means: the agent filters with exactly these.
+    stored = {}
+    if (ev / "enums.json").exists():
+        bare = {t.split(".", 1)[1].upper(): t for t in schema}
+        for e in load_json(ev / "enums.json"):
+            key = e["table"] if e["table"] in schema else bare.get(e["table"].upper())
+            values = [str(v) for v in e.get("values") or []]
+            if (key and values and len(values) <= MAX_ENUM_VALUES
+                    and all(0 < len(v) <= 255 for v in values)):
+                stored.setdefault(key, {})[str(e["column"]).upper()] = list(
+                    dict.fromkeys(values))
     usage = load_json(ev / "usage.json") if (ev / "usage.json").exists() else {}
 
     # --- table shells ---
@@ -89,6 +105,10 @@ def main():
             "grain": grains.get(table, []),
             "columns": [{"name": c} for c in cols],
         }
+        for c in rec["columns"]:
+            values = (stored.get(table) or {}).get(c["name"].upper())
+            if values:
+                c["enum_values"] = [{"value": v} for v in values]
         p = args.run / "cassis" / "tables" / sch / f"{name}.yml"
         p.parent.mkdir(parents=True, exist_ok=True)
         p.write_text(yaml.safe_dump(rec, sort_keys=False, allow_unicode=True))

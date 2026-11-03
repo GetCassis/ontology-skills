@@ -49,7 +49,9 @@ answers in chat; then run `intake.py write`. Nothing here asks you to WRITE
 documentation — point the kit at what you already have, in any shape.
 
 1. Schema export — a file listing every table and column in the warehouse
-   (information-schema export, schema.json). Mandatory.        --schema
+   (information-schema export, schema.json, or the .schema.json that
+   `cassis schema pull` writes for a warehouse already connected to
+   Cassis). Mandatory.                                          --schema
 2. Transformation repo — the dbt project (or equivalent), or a docs export
    of it. Mandatory: without defining SQL there is no grain, no join
    evidence, no unit claim.                        --input, --adapter
