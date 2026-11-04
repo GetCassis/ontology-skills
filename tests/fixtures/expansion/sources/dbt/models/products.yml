@@ -1,0 +1,11 @@
+version: 2
+models:
+  - name: products
+    description: Product catalog used at checkout.
+    columns:
+      - name: product_id
+        data_tests: [unique, not_null]
+      - name: product_name
+        description: Display name used in the storefront.
+      - name: category
+        description: Merchandising category assigned by the catalog team.

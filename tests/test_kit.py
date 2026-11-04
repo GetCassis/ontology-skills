@@ -1999,6 +1999,9 @@ def main():
     if harness.failures:
         print(f"{len(harness.failures)} FAILURES: {harness.failures}")
         sys.exit(1)
+    from test_expansion import run_tests
+    if not run_tests():
+        sys.exit(1)
     print("all tests passed")
 
 if __name__ == "__main__":

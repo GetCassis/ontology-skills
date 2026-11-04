@@ -342,8 +342,25 @@ generator over your existing tree. It is an agent workflow, not an automatic mer
 validation uses the tools available in your project. Metadata expansion needs no live warehouse
 connection, but your configured model's data-handling constraints still apply.
 
-The expansion skill is newly published; it has not yet been validated on a real customer
-expansion. The implementation, measurements and detailed instructions above describe **bootstrap**.
+Expansion can also work on bootstrap's output without a Cassis account or API
+key. Your coding agent still uses its configured model; authenticated Cassis
+checks and publication are optional connected steps.
+
+For substantial additions from source assets, the skill uses local
+`expansion.py prepare` and `expansion.py check` commands by default, or the
+project's established equivalent tools. They reuse the source extractors, retain
+an immutable baseline, surface source differences and compare the draft with
+existing definitions. They never generate over the maintained tree, call a model
+or publish. The agent reuses or sets up a separate toolkit checkout with the same
+three Python dependencies as bootstrap. For focused edits supported by existing
+evidence, it uses the project's checks and a saved baseline directly; no new
+extraction or toolkit installation is required. Both routes preserve the evidence
+and review requirements. See the skill's
+[local tooling guide](skills/ontology-expansion/references/local-tools.md).
+
+The [expansion tests](tests/fixtures/expansion/README.md) cover preservation
+of existing definitions, revenue filters, double-counting through joins,
+refactors and repeated runs.
 
 `--full-depth` is what lets `npx skills add` find this skill beside the root-level bootstrap
 skill; `npx skills add GetCassis/ontology-skills --list --full-depth` shows both. This repository

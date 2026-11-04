@@ -261,7 +261,8 @@ def ingest_dashboards(dirs: list[Path], known_tables: set) -> list[dict]:
                     if not sql:
                         continue
                     rows.append({
-                        "id": fact_id("d", p.name, i),
+                        "id": fact_id("d", str(p.resolve()), i),
+                        "path": str(p.resolve()),
                         "dashboard": dname,
                         "card": card.get("name") or str(i),
                         "sql": sql,
@@ -277,7 +278,8 @@ def ingest_dashboards(dirs: list[Path], known_tables: set) -> list[dict]:
                     if not sql:
                         continue
                     rows.append({
-                        "id": fact_id("d", p.name, dc.get("id")),
+                        "id": fact_id("d", str(p.resolve()), dc.get("id")),
+                        "path": str(p.resolve()),
                         "dashboard": dname,
                         "card": card.get("name") or str(dc.get("id")),
                         "sql": sql,
@@ -649,7 +651,7 @@ def main():
     if args.dashboards_dir:
         rows = ingest_dashboards(args.dashboards_dir, known)
         write_csv_rows(ws / "dashboard_queries.csv", rows,
-                       ["id", "dashboard", "card", "sql", "tables"])
+                       ["id", "path", "dashboard", "card", "sql", "tables"])
         print(f"dashboard queries: {len(rows)}")
     if args.query_history:
         rows = ingest_query_history(args.query_history, known)

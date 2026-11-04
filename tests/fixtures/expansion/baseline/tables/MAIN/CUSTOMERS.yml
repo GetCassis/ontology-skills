@@ -1,0 +1,13 @@
+schema_name: MAIN
+table_name: CUSTOMERS
+domain_path: customers
+description: People registered with the store.
+grain:
+- CUSTOMER_ID
+columns:
+- name: CUSTOMER_ID
+- name: EMAIL
+- name: COUNTRY_CODE
+  description: Country recorded when this customer signed up; do not use as shipping
+    country.
+- name: CREATED_AT

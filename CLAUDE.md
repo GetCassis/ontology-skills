@@ -1,5 +1,11 @@
 # Bootstrap kit — how to run this
 
+For an existing maintained context, follow `skills/ontology-expansion/SKILL.md`.
+It selects tools according to the work and available evidence. Read its
+local-tooling reference when using the shared commands. The bootstrap generation
+sequence and four checkpoints below apply to creating a new context, not to
+expansion.
+
 You are assembling a first Cassis ontology from the evidence the user pointed you at. The
 repository starts empty; the company's meaning does not. Read `addendum_v2.md` §17 (the process)
 and §14-16 (the evidence and enrichment rules) before starting.

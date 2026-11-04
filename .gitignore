@@ -9,6 +9,7 @@ fixtures/
 # clone. `fixtures/` above kept it untracked, so the suite passed here and would
 # have failed for anyone else.
 !tests/fixtures/
+!tests/fixtures/expansion/**
 */input/
 */workspace*/
 *.duckdb

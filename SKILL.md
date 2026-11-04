@@ -17,6 +17,10 @@ description: |
 This repository is both the skill and the tool: Python phases that do everything the inputs
 determine, plus an operating contract for the judgment stages.
 
+Use this entry point for a new context. Once the team maintains the result,
+continue with `skills/ontology-expansion/SKILL.md`; rerunning the generator is
+not an incremental update to that maintained tree.
+
 ## Before anything else
 
 The run needs a full, writable checkout of this repository as its working directory, because

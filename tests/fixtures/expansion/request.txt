@@ -1,0 +1,1 @@
+Expand this context so we can answer revenue by product. Preserve our existing revenue definition, propose useful domain changes, and prepare a reviewable diff. Use the supplied exports and documentation. Do not connect to a warehouse or publish.

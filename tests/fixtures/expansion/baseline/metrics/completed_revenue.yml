@@ -1,0 +1,9 @@
+name: completed_revenue
+display_name: Completed revenue
+domain_path: commerce
+table_schema: MAIN
+table_name: ORDERS
+expression: SUM(TOTAL_AMOUNT)
+filters: STATUS = 'completed'
+unit: EUR
+description: Finance-approved revenue from completed orders only.

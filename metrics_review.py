@@ -93,20 +93,16 @@ OWNER_TIERS = {"repo_text", "warehouse_comment", "warehouse_glossary",
                "semantic_layer"}
 
 
-def owner_text_on_args(run: Path, m: dict, cores) -> list:
+def owner_text_on_args(run: Path, m: dict, cores, tree=None) -> list:
     """The warehouse owner's own words on an aggregated column corroborate the
     metric (§14: definition-level corroboration, unit and meaning). Only stamped
     prefill tiers count; see OWNER_TIERS."""
     key_s, key_t = m.get("table_schema"), m.get("table_name")
     if not (key_s and key_t):
         return []
-    p = run / "cassis" / "tables" / str(key_s) / f"{key_t}.yml"
-    if not p.exists():
-        return []
-    try:
-        rec = yaml.safe_load(p.read_text()) or {}
-    except yaml.YAMLError:
-        return []
+    tree = tree if tree is not None else load_tree(run / "cassis")
+    rec = tree["tables"].get(f"{key_s}.{key_t}") or \
+        tree["tables"].get(f"{key_s}.{key_t}".upper()) or {}
     by_name = {str(c.get("name", "")).upper(): c for c in rec.get("columns") or []}
     out = []
     for _fn, arg in cores:
@@ -117,8 +113,9 @@ def owner_text_on_args(run: Path, m: dict, cores) -> list:
     return out
 
 
-def review_rows(run: Path, workspace: Path):
-    tree = load_tree(run / "cassis")
+def review_rows(run: Path, workspace: Path, tree_path: Path = None,
+                provenance: Path = None):
+    tree = load_tree(tree_path or run / "cassis", provenance)
     idx = corpus_index(workspace / "evidence")
     # A semantic layer's declared metrics sit in the same candidate file but are
     # not a query corpus: with only those, a metric nobody queried is unread,
@@ -133,7 +130,7 @@ def review_rows(run: Path, workspace: Path):
         declared_hits = [h for h in hits if h.get("provenance") == "declared"]
         occurrences = sum(h["occurrences"] for h in corpus_hits)
         corpus_sources = sorted({s for h in corpus_hits for s in h.get("sources") or []})
-        owner_cols = owner_text_on_args(run, m, cores)
+        owner_cols = owner_text_on_args(run, m, cores, tree)
 
         evidence = []
         if corpus_hits:
@@ -278,19 +275,28 @@ def render_md(rows, has_corpus: bool, declared=None) -> str:
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--run", type=Path, required=True)
+    source = ap.add_mutually_exclusive_group(required=True)
+    source.add_argument("--run", type=Path)
+    source.add_argument("--tree", type=Path, help="existing canonical Cassis directory")
+    ap.add_argument("--provenance", type=Path,
+                    help="sidecar with description hashes; stale/legacy stamps do not corroborate")
     ap.add_argument("--workspace", type=Path, required=True)
     ap.add_argument("--out", type=Path)
     ap.add_argument("--strict", action="store_true",
                     help="exit 1 if any metric is UNGROUNDED")
     args = ap.parse_args()
+    if args.tree and not args.out:
+        ap.error("--tree requires --out outside the context directory")
+    if args.tree and (args.out.resolve() == args.tree.resolve()
+                      or args.tree.resolve() in args.out.resolve().parents):
+        ap.error("--out must be outside the context directory")
 
-    rows, has_corpus = review_rows(args.run, args.workspace)
+    rows, has_corpus = review_rows(args.run, args.workspace, args.tree, args.provenance)
     out = args.out or (args.run / "METRICS-REVIEW.md")
     out.parent.mkdir(parents=True, exist_ok=True)
     dp = args.workspace / "declared.json"
     out.write_text(render_md(rows, has_corpus, load_json(dp) if dp.exists() else None))
-    dump_json(rows, args.run / "metrics_review.json")
+    dump_json(rows, (args.run or out.parent) / "metrics_review.json")
 
     n_bad = sum(1 for r in rows if r["stamp"] == "UNGROUNDED")
     n_verify = sum(1 for r in rows if r["stamp"] == "VERIFY")

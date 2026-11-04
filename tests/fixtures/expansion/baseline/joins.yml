@@ -1,0 +1,9 @@
+- from_schema: MAIN
+  from_table: ORDERS
+  to_schema: MAIN
+  to_table: CUSTOMERS
+  column_pairs:
+  - from_column: CUSTOMER_ID
+    to_column: CUSTOMER_ID
+  cardinality: many_to_one
+  condition_sql: '"MAIN"."ORDERS"."CUSTOMER_ID" = "MAIN"."CUSTOMERS"."CUSTOMER_ID"'

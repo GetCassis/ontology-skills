@@ -35,6 +35,7 @@ anything it does not own, and a second run produces no diff. What dbt has no
 field for goes under one namespace, `meta.cassis.*`, so it stays greppable.
 """
 import argparse
+import hashlib
 import re
 import sys
 from collections import Counter
@@ -190,6 +191,9 @@ def canonical_table(key: str, tab: dict, schema: dict, dropped: Counter,
         if enum_values:
             oc["enum_values"] = enum_values
         src = {k: c[k] for k in PROVENANCE_KEYS if c.get(k)}
+        if src and oc.get("description"):
+            src["description_sha256"] = hashlib.sha256(
+                oc["description"].encode()).hexdigest()
         if oc.get("description") and same_text(oc["description"], wc.get(cname)):
             src["deferred_to_warehouse_comment"] = oc.pop("description")
         if src:

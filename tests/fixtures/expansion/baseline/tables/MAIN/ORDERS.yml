@@ -1,0 +1,21 @@
+schema_name: MAIN
+table_name: ORDERS
+domain_path: commerce
+description: Orders recorded by the storefront; cancelled orders retain their total_amount.
+grain:
+- ORDER_ID
+columns:
+- name: ORDER_ID
+  description: Primary key of the order, assigned by the storefront at checkout.
+- name: CUSTOMER_ID
+  description: Customer who placed the order.
+- name: STATUS
+  description: Order lifecycle status.
+  enum_values:
+  - value: completed
+  - value: cancelled
+- name: TOTAL_AMOUNT
+  description: Order total in EUR, tax included. Cancelled orders keep their amount.
+  unit: EUR
+- name: PLACED_AT
+  description: Timestamp of order placement.

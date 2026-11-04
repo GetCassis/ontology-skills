@@ -6,8 +6,9 @@ description: >-
   Let the user define the business domain, build on the curated ontology,
   and propose refactors where useful. Produce a Git diff with evidence and
   regression checks. Use for an ontology that is already seeded, including
-  projects synced to Git. Does not require live warehouse access. Initial
-  ontology creation belongs to the separate ontology-bootstrap skill.
+  projects synced to Git. Local work needs no Cassis account or live warehouse
+  access. Initial ontology creation belongs to the separate ontology-bootstrap
+  skill.
 ---
 
 # Ontology expansion
@@ -19,6 +20,9 @@ reconstructing them from upstream sources would lose the team's curation.
 The existing structure is a starting point, not a boundary on what the user
 can model. Keep the bootstrap approach: assemble meaning from evidence, leave
 unknowns as questions, and let the user decide business scope and definitions.
+The local workflow also serves teams using bootstrap's output without Cassis.
+Connected Cassis checks and publication are available when the project has them;
+they are not prerequisites for preparing a local change.
 
 ## Establish the starting point
 
@@ -31,7 +35,8 @@ When the warehouse is connected, `cassis schema pull` writes its current schema
 into the context directory (`.schema.json`, gitignored, with keys, foreign keys
 and view definitions): the physical layer to extend from. Discover
 the actual ontology path and format from the checkout rather than assuming a
-new layout. This skill is standalone; it does not run the bootstrap pipeline.
+new layout. Use the modeling guidance already available; missing credentials
+for refreshing it do not prevent a local draft.
 
 Before editing, establish:
 
@@ -47,16 +52,37 @@ Before editing, establish:
   data access. Infer these from the request and repository first. Ask only for
   missing information that would materially change the work.
 - Which validation can actually run here, before drafting rather than after.
-  Run each check the repository and the installed CLI offer once, now, on the
-  untouched baseline: the structural check, the formatter, the repository's own
-  test or eval command. Some need a project binding or credentials this
-  checkout does not have, and a plan that leans on an eval suite nobody can run
-  is a plan with no behavioural check in it. Say at the outset which checks are
-  available and what will therefore stay unverified.
+  Run the relevant available local checks on the untouched baseline. Use
+  authenticated or paid checks only with the required access and authorization.
+  Missing credentials do not call for account setup or repeated login attempts.
+  Say which checks are available and what will therefore stay unverified.
 
 An expansion request authorizes preparing the changes, not automatically
 merging or publishing them. Follow any explicit authorization already given.
 In a synced project, a merge to the publication branch can affect all users.
+
+### Choose tools for the work
+
+For substantial additions from schema, dbt, dashboards or other source assets,
+use the shared preparation and checking tools by default. An established project
+workflow that already extracts the evidence and compares changes can serve the
+same purpose. Read [local tooling](references/local-tools.md) when using the
+shared commands; discover or set up their checkout and Python environment
+yourself, and reuse them across runs.
+
+For a focused change supported by existing project evidence, work directly in
+the ontology with the project's checks. Clarifying an evidenced definition or
+moving existing objects need not trigger extraction or require a fresh schema
+export. Record the Git base and save starting versions of affected files outside
+the ontology, including uncommitted and untracked content. Compare against that
+baseline as well as Git so existing work is not attributed to the expansion.
+
+Both approaches require evidence for new claims, explicit review of changed
+meaning, reference checks and a reviewable diff. A small edit to a formula or
+shared rule can still affect many answers. New physical identifiers still need
+schema or equivalent authoritative evidence. If tooling or evidence is missing,
+continue supported work and report the gap; do not fabricate inputs or claim
+that an unavailable check passed.
 
 ## Let the user define the domain
 
@@ -99,8 +125,11 @@ Separate structural changes from changes in business meaning. Moving or
 renaming a metric must not silently change its formula, filters or unit.
 Offer a smaller additive option when the migration cost is disproportionate.
 
-**Get the structure approved before authoring any content.** Present the
-proposed tree — new domains, splits, moves, and the table that lands in each —
+For changes that keep the existing domain structure and object assignments,
+state that and proceed. Do not ask the user to approve an unchanged tree.
+
+**Get a new or changed structure approved before authoring its content.** Present
+the proposed tree — new domains, splits, moves, and the table that lands in each —
 and wait. Every table and metric names a domain, so content filled into a
 hierarchy the user then changes all has to move. This is the one approval the
 expansion asks for: once the tree is agreed, draft everything the evidence
@@ -124,6 +153,16 @@ question. Changes to previously reviewed meaning return to the user with the
 consequence made explicit.
 
 ## Assemble evidence without recreating the ontology
+
+When using the shared tools, run `expansion.py prepare` before edits with the
+existing context, supplied sources and questions, placing its run directory
+outside both the context and the sources.
+Use `--table` for the physical tables supporting the chosen scope, including
+existing tables whose rules or joins may be affected. Omit it only for an initial
+inventory; the script does not decide business scope. Read `PREPARE.md`,
+`inventory.json` and `METRICS-REVIEW.md`. The baseline is immutable: after editing
+the context, use `check`, not another preparation run to reset the comparison.
+Source differences are candidates for review, not automatic corrections.
 
 Use the supplied assets to support the additions:
 
@@ -195,8 +234,10 @@ conflicts, rather than re-deriving facts a tool can extract.
 - Extend domain guidance and navigation to include the new coverage. Preserve
   curated prose. Generated navigation regions are regenerated by the
   repository's formatter — `cassis context fmt` for a Cassis tree, which also
-  refreshes a domain README's nav region; run it rather than hand-writing those
-  blocks, and note that a stale one fails `cassis context check`.
+  refreshes a domain README's nav region. Run it when available and authorized.
+  Otherwise preserve generated regions, check references you can inspect and
+  identify any navigation needing regeneration before publication. A local draft
+  can proceed, but stale navigation can fail `cassis context check`.
 - Preserve identifiers, locations, permissions-related metadata, tests and
   unrelated fields outside the agreed refactor. For a refactor, track old-to-new
   names/paths and update all affected metric, table, join, domain, navigation
@@ -217,6 +258,19 @@ modify the live schema unless those actions are in the user's request.
 
 ## Validate the expansion against its baseline
 
+If preparation recorded a shared-tool baseline, run `expansion.py check` against
+it and read `REVIEW.md` and `expansion-check.json`. Exit 1 means structural/input
+errors; exit 2 means changes to existing definitions, removals, refactors or a
+changed checkout commit need review. Exit 0 only means those checks found no
+such problem. Neither a clean
+exit nor a reviewer note establishes answer accuracy or publication approval.
+Review the generated claim/SQL pairs and metric evidence as well as the diff.
+The checker cannot prove that every natural-language claim is grounded. For
+direct edits or an established project workflow, compare with the saved starting
+files and use the project's available validators and tests. Report additions,
+removals, moves and changes to formulas, filters, joins or curated prose either
+way. Do not run `check` without a prepared baseline or create one after editing.
+
 Inspect the final Git diff. It should account for every added/changed object,
 preserve unrelated work, and contain no unexplained deletions or overwritten
 business definitions. Check against the recorded base; if the target branch
@@ -227,7 +281,10 @@ replace them.
 Use the repository's established validation and the installed CLI's documented
 commands. Discover supported flags through help rather than guessing them.
 Where available, `cassis context fmt` and `cassis context check` provide
-format/structural checks; inspect their changes and report unavailable checks.
+format/structural checks. These can require credentials; discover requirements
+and use them only with the available access and authorization. Inspect their
+changes and report unavailable checks. A Cassis account or API key is not
+required to deliver the local diff.
 `cassis context test -q "<question>"` runs one question through the answering
 agent against the local files, `cassis eval run` scores the eval suite against
 them, and `cassis verify` runs the formatter check, the structural check and the

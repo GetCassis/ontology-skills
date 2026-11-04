@@ -1,0 +1,16 @@
+[
+  {
+    "id": "completed-revenue",
+    "question": "What is our completed-order revenue?",
+    "tables": [
+      "MAIN.ORDERS"
+    ]
+  },
+  {
+    "id": "customer-country",
+    "question": "What does customer country mean?",
+    "tables": [
+      "MAIN.CUSTOMERS"
+    ]
+  }
+]

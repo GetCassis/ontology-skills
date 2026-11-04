@@ -1,0 +1,9 @@
+dashboard:
+  name: Booked order amounts
+cards:
+  - name: All order amounts including cancellations
+    sql: SELECT SUM(TOTAL_AMOUNT) FROM MAIN.ORDERS
+  - name: Booked EUR
+    sql: SELECT SUM(TOTAL_AMOUNT) FROM MAIN.ORDERS
+  - name: All order amounts by customer
+    sql: SELECT CUSTOMER_ID, SUM(TOTAL_AMOUNT) FROM MAIN.ORDERS GROUP BY CUSTOMER_ID

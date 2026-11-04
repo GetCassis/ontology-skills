@@ -1,0 +1,22 @@
+version: 2
+models:
+  - name: order_items
+    description: Line items sold on orders. Quantity times unit_price is the line amount in EUR, tax included.
+    columns:
+      - name: order_item_id
+        description: Storefront identifier assigned to each line item.
+        data_tests: [unique, not_null]
+      - name: order_id
+        data_tests:
+          - relationships:
+              to: ref('orders')
+              field: order_id
+      - name: product_id
+        data_tests:
+          - relationships:
+              to: ref('products')
+              field: product_id
+      - name: quantity
+        description: Number of units purchased on this line.
+      - name: unit_price
+        description: Price per purchased unit in EUR, tax included.

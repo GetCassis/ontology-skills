@@ -30,8 +30,13 @@ Gates (deterministic):
 
 Plus: extracts (claim, source SQL) pairs for the LLM judge into
 --judge-input; the judge itself is an agent step, not this script.
+
+Reads working and canonical trees without rewriting them. Identifier/parse and
+broken-reference findings exit 1; other findings remain advisory. This does not
+replace the full Cassis format validator or establish business correctness.
 """
 import argparse
+import hashlib
 import json
 import re
 import sys
@@ -70,8 +75,28 @@ FACT_RE = re.compile(
     r"is computed|comes? from)\b", re.IGNORECASE)
 
 
-def load_tree(tree: Path) -> dict:
+def load_tree(tree: Path, provenance: Path = None) -> dict:
+    """Read working or canonical files into a checking view; never rewrite them.
+
+    Canonical identifiers use physical case. The evidence index uses upper-case
+    identifiers, so normalize only the in-memory checking view. Sidecar owner
+    stamps count only while the description still matches the recorded hash.
+    """
+    tree = Path(tree)
     tables, metrics, unparseable = {}, {}, []
+
+    def invalid(p, detail):
+        unparseable.append({"gate": "unparseable", "file": str(p), "detail": detail})
+
+    sidecar = {}
+    if provenance:
+        try:
+            sidecar = load_json(provenance)
+            if not isinstance(sidecar, dict):
+                raise ValueError("provenance must be an object")
+        except (OSError, ValueError) as e:
+            invalid(provenance, str(e))
+            sidecar = {}
 
     def _read(p):
         """A file that will not parse is a gate finding, not a crash.
@@ -89,27 +114,96 @@ def load_tree(tree: Path) -> dict:
                                 "detail": str(e).split("\n")[0]})
             return None
 
-    for p in sorted((tree / "tables").rglob("*.yml")):
+    def files(folder):
+        return sorted(p for p in folder.rglob("*")
+                      if p.is_file() and p.suffix in {".yml", ".yaml"})
+
+    for p in files(tree / "tables"):
         d = _read(p)
-        if isinstance(d, dict) and d.get("name"):
-            tables[d["name"]] = {"path": p, **d}
-    for p in sorted((tree / "metrics").rglob("*.yml")):
+        if not isinstance(d, dict):
+            invalid(p, "table must be a mapping")
+            continue
+        canonical = bool(d.get("schema_name") and d.get("table_name"))
+        name = (f"{d['schema_name']}.{d['table_name']}".upper()
+                if canonical else d.get("name"))
+        cols, grain = d.get("columns", []), d.get("grain", [])
+        if not isinstance(name, str) or not name or not isinstance(d.get("domain_path"), str) \
+                or not isinstance(cols, list) \
+                or not all(isinstance(c, dict) and isinstance(c.get("name"), str)
+                           and (c.get("description") is None or isinstance(c["description"], str))
+                           for c in cols) or not isinstance(grain, list) \
+                or not all(isinstance(c, str) for c in grain):
+            invalid(p, "table needs an identity, a column list and a grain list")
+            continue
+        if name in tables:
+            invalid(p, f"duplicate table {name}")
+        rec = {**d, "name": name, "path": p}
+        if canonical:
+            rec["grain"] = [c.upper() for c in grain]
+            rec["columns"] = [{**c, "name": c["name"].upper()} for c in cols]
+            sources = sidecar.get(name, {})
+            for col in rec["columns"]:
+                src = sources.get(col["name"], {}) if isinstance(sources, dict) else {}
+                desc = col.get("description")
+                if isinstance(src, dict) and isinstance(desc, str) and \
+                        src.get("description_sha256") == hashlib.sha256(desc.encode()).hexdigest():
+                    for k in ("description_source", "description_source_detail"):
+                        if k in src:
+                            col[k] = src[k]
+        tables[name] = rec
+    for p in files(tree / "metrics"):
         d = _read(p)
-        if isinstance(d, dict):
-            metrics[d.get("name", p.stem)] = {"path": p, **d}
+        if not isinstance(d, dict) or not isinstance(d.get("name", p.stem), str) \
+                or any(d.get(k) is not None and not isinstance(d[k], str)
+                       for k in ("domain_path", "description", "notes", "expression", "filters",
+                                 "table_schema", "table_name")):
+            invalid(p, "metric must be a named mapping")
+            continue
+        name = d.get("name", p.stem)
+        if name in metrics:
+            invalid(p, f"duplicate metric {name}")
+        metrics[name] = {**d, "path": p}
+        # Emitted metrics carry domain_path; working metrics may omit it.
+        if "domain_path" in d:
+            for k in ("table_schema", "table_name"):
+                if isinstance(d.get(k), str):
+                    metrics[name][k] = d[k].upper()
     joins = []
     if (tree / "joins.yml").exists():
         joins = _read(tree / "joins.yml") or []
+    if not isinstance(joins, list) or not all(isinstance(j, dict) for j in joins):
+        invalid(tree / "joins.yml", "joins must be a list of mappings")
+        joins = []
+    valid_joins = []
+    for j in joins:
+        if not isinstance(j.get("column_pairs", []), list) or not all(
+                isinstance(p, dict) for p in j.get("column_pairs", [])) \
+                or not isinstance(j.get("on", []), list):
+            invalid(tree / "joins.yml", "join column_pairs and on must be lists")
+            continue
+        if "column_pairs" in j:
+            j = dict(j)
+            for k in ("from_schema", "from_table", "to_schema", "to_table"):
+                if isinstance(j.get(k), str):
+                    j[k] = j[k].upper()
+            j["column_pairs"] = [{k: v.upper() if isinstance(v, str) else v
+                                  for k, v in p.items()} for p in j["column_pairs"]]
+        valid_joins.append(j)
+    joins = valid_joins
     readmes = {str(p.relative_to(tree / "domains")): p.read_text()
                for p in sorted((tree / "domains").rglob("README.md"))}
+    if "README.md" not in readmes:
+        invalid(tree / "domains" / "README.md", "root domain README is missing")
+    if not tables:
+        invalid(tree, "no table files loaded; check the context path and format")
     return {"tables": tables, "metrics": metrics, "joins": joins,
-            "readmes": readmes, "unparseable": unparseable}
+            "readmes": readmes, "unparseable": unparseable, "tree_path": tree}
 
 
 # ---------- gate: identifiers ----------
 
 def gate_identifiers(t, schema) -> list:
-    findings = []
+    findings = list(t.get("unparseable", []))
     domains = {""}
     for rel in t["readmes"]:
         d = str(Path(rel).parent)
@@ -140,20 +234,15 @@ def gate_identifiers(t, schema) -> list:
             if n not in cols:
                 findings.append({"gate": "identifiers", "file": f,
                                  "detail": f"column {n} not in schema"})
-    # Bare keywords only. Function NAMES are not listed here on purpose: a
-    # hand-maintained list of them is a defect generator, and it generated one —
-    # an independent run hit `identifiers: COALESCE not a column`, because the
-    # list happened to carry NULLIF and NULLIFZERO and not COALESCE, and the
-    # person running it had to patch this file to finish. A function is
-    # structurally identifiable: it is the token immediately before a `(`. That
-    # is now how they are skipped, so the next warehouse's SAFE_DIVIDE, ROUND or
-    # GREATEST costs nobody an afternoon.
-    kw = {"DISTINCT", "NOT", "LIKE", "AND", "OR", "IN", "IS",
-          "NULL", "TRUE", "FALSE", "CASE", "WHEN", "THEN", "ELSE", "END",
-          # cast targets, which follow AS rather than a paren
-          "NUMERIC", "DECIMAL", "FLOAT", "INT", "INTEGER", "BIGINT", "SMALLINT",
-          "STRING", "VARCHAR", "CHAR", "DATE", "DATETIME", "TIMESTAMP",
-          "BOOLEAN", "BOOL"}
+    # A canonical metric must point to a domain that still exists after moves.
+    for m in t["metrics"].values():
+        if "domain_path" in m and m["domain_path"] not in domains:
+            findings.append({"gate": "identifiers", "file": str(m["path"]),
+                             "detail": f"metric domain {m['domain_path']!r} unresolved"})
+        key = f"{m.get('table_schema')}.{m.get('table_name')}"
+        if t.get("tree_path") and key not in t["tables"]:
+            findings.append({"gate": "identifiers", "file": str(m["path"]),
+                             "detail": f"metric base table {key} has no modeled table file"})
     schema_ci = {k.upper(): k for k in schema}
     for name, m in t["metrics"].items():
         f = str(m["path"])
@@ -171,30 +260,38 @@ def gate_identifiers(t, schema) -> list:
                                        f"from the schema's {canonical}"})
             key = canonical
         cols = {c.upper() for c in schema[key]}
-        blob = f"{m.get('expression') or ''} {m.get('filters') or ''}"
-        # Strip quoted literals first: `status = 'SUCCESS'` names a VALUE, not a
-        # column, and flagging it would make the gate cry wolf on every filter.
-        blob = re.sub(r"'[^']*'|\"[^\"]*\"", " ", blob)
-        # Bare UPPERCASE identifiers, plus `backticked` ones in any case. The
-        # backtick branch matters: a metric written SUM(`net_revenue_eur`)
-        # skips the bare-word pattern, which only matches uppercase — on one
-        # real run, 3 such metrics summed columns that do not exist in the
-        # warehouse and nothing caught them.
-        # `(?!\s*\()` drops function calls: the token before an open paren is
-        # never a column reference, whatever the function is called.
-        idents = set(re.findall(r"\b[A-Z][A-Z0-9_]{2,}\b(?!\s*\()", blob))
-        idents |= {i for i in re.findall(r"`([A-Za-z_][A-Za-z0-9_]*)`", blob)}
-        for ident in idents:
-            if ident.upper() in kw or ident.upper() in cols:
-                continue
+        # Parse identifiers rather than dropping quoted names or missing lower-case
+        # columns. sqlglot is already a runtime dependency of the evidence layer.
+        import sqlglot
+        from sqlglot import exp
+        expression = m.get("expression")
+        if not isinstance(expression, str) or not expression.strip():
             findings.append({"gate": "identifiers", "file": f,
-                             "detail": f"identifier {ident} not a column of {key}"})
+                             "detail": "metric has no SQL expression"})
+            continue
+        sql = f"SELECT {expression} FROM t"
+        if m.get("filters"):
+            sql += f" WHERE {m['filters']}"
+        try:
+            parsed = sqlglot.parse_one(sql, read="bigquery" if "`" in sql else None)
+            idents = {c.name for c in parsed.find_all(exp.Column)}
+        except sqlglot.errors.ParseError as e:
+            findings.append({"gate": "identifiers", "file": f,
+                             "detail": f"metric SQL cannot be checked: {str(e).splitlines()[0]}"})
+            continue
+        for ident in sorted(idents):
+            if ident.upper() not in cols:
+                findings.append({"gate": "identifiers", "file": f,
+                                 "detail": f"identifier {ident} not a column of {key}"})
     for i, j in enumerate(t["joins"]):
         for side in ("from", "to"):
             key = f"{j.get(f'{side}_schema')}.{j.get(f'{side}_table')}"
             if key not in schema:
                 findings.append({"gate": "identifiers", "file": "joins.yml",
                                  "detail": f"join {i}: endpoint {key} not in schema"})
+            elif t.get("tree_path") and key not in t["tables"]:
+                findings.append({"gate": "identifiers", "file": "joins.yml",
+                                 "detail": f"join {i}: endpoint {key} has no modeled table file"})
         fk = f"{j.get('from_schema')}.{j.get('from_table')}"
         tk = f"{j.get('to_schema')}.{j.get('to_table')}"
         for q in j.get("column_pairs") or []:
@@ -260,6 +357,18 @@ def gate_prose_refs(t, schema) -> list:
             if ref.split(".")[0] in known_schemas and ref not in schema:
                 out.append({"gate": "prose_refs", "file": rel,
                             "detail": f"{ref} mentioned but not in schema"})
+    for rel, text in t["readmes"].items():
+        origin = t.get("tree_path")
+        if origin is None:
+            continue
+        p = Path(origin) / "domains" / rel
+        for target in re.findall(r"\[[^\]]*\]\(([^)]+)\)", text):
+            target = target.strip("<>").split("#", 1)[0]
+            if not target or ":" in target or target.startswith("/"):
+                continue
+            if Path(target).suffix in {".md", ".yml", ".yaml"} and not (p.parent / target).exists():
+                out.append({"gate": "prose_refs", "file": str(p),
+                            "detail": f"broken context link: {target}"})
     for name, tab in t["tables"].items():
         blob = json.dumps(tab, default=str)
         for m in ref_re.finditer(blob):
@@ -594,12 +703,36 @@ def _only_match(file_str: str, patterns) -> bool:
                for p in patterns)
 
 
+def check_tree(tree: Path, workspace: Path, provenance: Path = None) -> dict:
+    """Shared read-only checks. Only identity/parse and broken-reference errors
+    block a command; semantic heuristics remain visible review findings."""
+    schema = load_json(workspace / "schema.json")
+    t = load_tree(tree, provenance)
+    ev = workspace / "evidence"
+    return {
+        "identifiers": gate_identifiers(t, schema),
+        "restatement": gate_restatement(t),
+        "hedges": gate_hedges(t, tree),
+        "prose_refs": gate_prose_refs(t, schema),
+        "metric_grounding": gate_metric_grounding(t, ev),
+        "glossary_crossmatch": gate_glossary_crossmatch(t, workspace),
+        "divergent_duplicates": gate_divergent_duplicates(t, workspace),
+        "population_rules": gate_population_rules(t, schema, ev),
+    }
+
+
+def has_errors(report):
+    return bool(report.get("identifiers") or report.get("prose_refs"))
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--tree", type=Path, required=True)
     ap.add_argument("--workspace", type=Path, required=True)
     ap.add_argument("--out", type=Path)
     ap.add_argument("--judge-input", type=Path)
+    ap.add_argument("--provenance", type=Path,
+                    help="optional description provenance sidecar; hashes must match")
     ap.add_argument("--only", action="append", metavar="GLOB", default=None,
                     help="report only findings whose file matches (fnmatch "
                          "glob; a bare substring matches too); repeatable. "
@@ -608,19 +741,8 @@ def main():
                          "while siblings are still editing theirs.")
     args = ap.parse_args()
 
-    schema = load_json(args.workspace / "schema.json")
-    t = load_tree(args.tree)
-    ev = args.workspace / "evidence"
-
-    report = {}
-    report["identifiers"] = gate_identifiers(t, schema)
-    report["restatement"] = gate_restatement(t)
-    report["hedges"] = gate_hedges(t, args.tree)
-    report["prose_refs"] = gate_prose_refs(t, schema)
-    report["metric_grounding"] = gate_metric_grounding(t, ev)
-    report["glossary_crossmatch"] = gate_glossary_crossmatch(t, args.workspace)
-    report["divergent_duplicates"] = gate_divergent_duplicates(t, args.workspace)
-    report["population_rules"] = gate_population_rules(t, schema, ev)
+    t = load_tree(args.tree, args.provenance)
+    report = check_tree(args.tree, args.workspace, args.provenance)
 
     if args.only:
         report = {g: [f for f in findings
@@ -643,7 +765,8 @@ def main():
                      or _only_match(_pair_file(p), args.only)]
         dump_json(pairs, args.judge_input)
         print(f"judge input: {len(pairs)} claim/SQL pairs -> {args.judge_input}")
+    return 1 if has_errors(report) else 0
 
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())
