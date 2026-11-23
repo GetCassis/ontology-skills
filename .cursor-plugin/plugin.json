@@ -1,0 +1,19 @@
+{
+  "name": "ontology-bootstrap",
+  "displayName": "Cassis ontology skills",
+  "version": "1.4.0",
+  "description": "Build an initial analytics ontology or expand an existing Git-synced one. Evidence-backed definitions, user-defined domains, reviewable refactors and validation.",
+  "author": {
+    "name": "Cassis",
+    "email": "hello@getcassis.com"
+  },
+  "homepage": "https://github.com/GetCassis/ontology-skills",
+  "repository": "https://github.com/GetCassis/ontology-skills",
+  "license": "MIT",
+  "keywords": ["ontology", "dbt", "analytics", "context", "ai-agents", "semantic-layer", "documentation"],
+  "logo": "assets/logo.png",
+  "skills": [
+    "./",
+    "./skills/ontology-expansion"
+  ]
+}
