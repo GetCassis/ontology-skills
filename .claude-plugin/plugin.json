@@ -1,5 +1,5 @@
 {
-  "name": "ontology-bootstrap",
+  "name": "ontology-skills",
   "displayName": "Cassis ontology skills",
   "version": "1.4.0",
   "description": "Build an initial analytics ontology or expand an existing Git-synced one. Evidence-backed definitions, user-defined domains, reviewable refactors and validation.",
