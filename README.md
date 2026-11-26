@@ -79,7 +79,7 @@ Each one is proved from your own SQL.
      Without one the run still works, but expect structure rather than meaning.
    - **Optional, and worth it:** a column glossary or your warehouse's comments, docs, dashboard
      exports carrying SQL, a query log, a semantic layer (a Power BI model saved as a PBIP
-     project, dbt MetricFlow, Cube, or LookML).
+     project, dbt MetricFlow, Cube, LookML, or an Omni model).
 3. Open your coding agent in a folder next to them and ask:
 
    > Use ontology-bootstrap on our warehouse. The schema export is ./schema.csv and the dbt
@@ -131,7 +131,7 @@ anything does not survive first contact.
 | A column glossary, your warehouse's own column comments, or dbt `{% docs %}` blocks | Optional, and the single biggest saving: these three go straight into the ontology in your own words, kept as written. A description that only repeats a warehouse comment is left to the comment in the shipped tree, because Cassis reads comments itself and two copies drift. A column glossary has to be handed over as one. Nothing harvests definitions out of prose, because a bold heading matching a column name is not evidence it defines that column |
 | Free-form documentation: a wiki export, reference docs, PDFs | Optional. It answers the run's blocking questions, and never fills in a column: for each question where a wrong answer makes a number wrong, retrieval pulls the passages that might answer it, an agent decides whether any of them does, and the candidate reaches you at the fourth checkpoint with the page and line it came from. You accept it or you do not. Applying prose to a column by name instead was measured on a 4,700-page public handbook: 8 columns filled, 8 wrong |
 | Dashboard or saved-question exports carrying SQL | Optional. Join evidence, usage ranking and metric corroboration at once |
-| A semantic layer: a Power BI model saved as TMDL (a PBIP project), dbt MetricFlow YAML (classic or newer spec), a Cube YAML data model, or a LookML project | Optional. Its metrics, joins and column docs enter as declared evidence, each held against the schema export first. A Power BI table counts only through the warehouse table its Power Query source reads. DAX the kit can translate ships marked as translated, for a person to confirm. Time intelligence and filters through a related table are listed for review, never forced into a metric. See [`adapters/semantic_layer.md`](adapters/semantic_layer.md) |
+| A semantic layer: a Power BI model saved as TMDL (a PBIP project), dbt MetricFlow YAML (classic or newer spec), a Cube YAML data model, a LookML project, or an Omni model | Optional. Its metrics, joins and column docs enter as declared evidence, each held against the schema export first. A Power BI table counts only through the warehouse table its Power Query source reads. DAX the kit can translate ships marked as translated, for a person to confirm. Time intelligence and filters through a related table are listed for review, never forced into a metric. See [`adapters/semantic_layer.md`](adapters/semantic_layer.md) |
 | A query log, if you can export one | Optional. Ranks what people actually query |
 
 Nothing here asks you to write documentation. Point the kit at what already exists.

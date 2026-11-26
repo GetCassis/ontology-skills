@@ -70,7 +70,8 @@ documentation — point the kit at what you already have, in any shape.
                  or --absent bi_corpus
    And any semantic layer that already declares metrics and joins: a
    Power BI model saved as TMDL (a PBIP project's definition folder),
-   dbt MetricFlow YAML, a Cube YAML data model, or a LookML project.
+   dbt MetricFlow YAML, a Cube YAML data model, a LookML project, or an
+   Omni model.
    Optional.                                       --declared (repeatable)
 5. Query history — a log of real queries, if exportable. Optional.
                  --questions-dir, or --absent query_history
@@ -228,7 +229,7 @@ def cmd_write(args):
                    args.dashboards_dir),
         _dir_block("saved questions / query history", "questions_dirs",
                    args.questions_dir),
-        _dir_block("semantic layer: TMDL, MetricFlow, or a declared file", "declared",
+        _dir_block("semantic layer: TMDL, MetricFlow, Cube, LookML, Omni, or a declared file", "declared",
                    args.declared),
     ]))
 

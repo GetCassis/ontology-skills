@@ -1818,6 +1818,73 @@ def kit_only_tests():
              and any(r["kind"] == "table" and r["name"] == "recent"
                      for r in ld["rejects"]), str((lr, ld["rejects"]))[:400])
 
+        # Omni: schema-view overlays, structured filters, topics, relationships
+        om = tmp / "omni" / "model"
+        (om / "MAIN").mkdir(parents=True)
+        (om / "MAIN" / "orders.view").write_text(_yaml.safe_dump({
+            "label": "Orders",
+            "dimensions": {"order_id": {"primary_key": True},
+                           "customer_id": {"description": "Who ordered."},
+                           "is_food": {"sql": "${TABLE}.is_food_order"}},
+            "measures": {
+                "count": {"aggregate_type": "count"},
+                "revenue": {"sql": "${order_total}", "aggregate_type": "sum",
+                            "synonyms": ["sales"]},
+                "food_orders": {"aggregate_type": "count",
+                                "filters": {"is_food": {"is": True}}},
+                "big_orders": {"aggregate_type": "count",
+                               "filters": {"order_total": {"greater_than": 20}}},
+                "aov": {"sql": "${revenue} / NULLIF(${count}, 0)"},
+                "food_share": {"sql": "${food_orders} / NULLIF(${count}, 0)"},
+                "vip_orders": {"aggregate_type": "count", "filters": {
+                    "main__customers.customer_type": {"is": "vip"}}},
+                "median_total": {"sql": "${order_total}", "aggregate_type": "median"}}}))
+        (om / "MAIN" / "customers.view").write_text(_yaml.safe_dump({
+            "dimensions": {"customer_type": {"description": "New or returning.",
+                                             "all_values": ["new", "vip"]}},
+            "measures": {"count": {"aggregate_type": "count"}}}))
+        (om / "recent.view").write_text(_yaml.safe_dump({
+            "sql": "SELECT * FROM main.orders WHERE order_total > 1",
+            "measures": {"count": {"aggregate_type": "count"}}}))
+        (om / "orders.topic").write_text(_yaml.safe_dump({
+            "base_view": "main__orders", "description": "Orders and who placed them.",
+            "ai_context": "Revenue excludes refunds.",
+            "joins": {"main__customers": {}}}))
+        (om / "relationships").write_text(_yaml.safe_dump([{
+            "join_from_view": "main__orders", "join_to_view": "main__customers",
+            "on_sql": "${main__orders.customer_id} = ${main__customers.customer_id}",
+            "relationship_type": "many_to_one", "join_type": "always_left"}]))
+        od = _sl.validate(_sl.load(tmp / "omni"), mschema)
+        omm = {m["name"]: m for m in od["metrics"]}
+        omr = {r["name"]: r["reason"] for r in od["review"]}
+        omc = {c["column"]: c for c in od["columns"]}
+        case("Omni: an undeclared field is a column; measures, structured filters, "
+             "derived measures, topics and relationships resolve",
+             od["source"].startswith("omni:")
+             and omm.get("orders.revenue", {}).get("expression") == "SUM(order_total)"
+             and omm["orders.revenue"]["table"] == "MAIN.ORDERS"
+             and "Also called: sales" in (omm["orders.revenue"]["description"] or "")
+             and omm.get("orders.food_orders", {}).get("filters") == "is_food_order = TRUE"
+             and omm.get("orders.big_orders", {}).get("filters") == "order_total > 20"
+             and omm.get("orders.aov", {}).get("expression")
+             == "(SUM(order_total)) / NULLIF((COUNT(*)), 0)"
+             and od["joins"] and od["joins"][0]["left"] == "MAIN.ORDERS"
+             and od["joins"][0]["right"] == "MAIN.CUSTOMERS"
+             and od["joins"][0]["on"] == ["customer_id = customer_id"]
+             and omc.get("CUSTOMER_TYPE", {}).get("enum_values") == ["new", "vip"]
+             and omc.get("CUSTOMER_ID", {}).get("description") == "Who ordered."
+             and any("Omni topic orders" in t["description"]
+                     and "Revenue excludes refunds." in t["description"]
+                     for t in od["tables"]),
+             str((od["metrics"], od["joins"], od["columns"], od["tables"]))[:600])
+        case("Omni: a filtered ratio, a filter reading another view and a median go "
+             "to review; a view built from a query is rejected",
+             "carry filters" in omr.get("orders.food_share", "")
+             and "another view" in omr.get("orders.vip_orders", "")
+             and "median" in omr.get("orders.median_total", "")
+             and any(r["kind"] == "table" and r["name"] == "recent"
+                     for r in od["rejects"]), str((omr, od["rejects"]))[:400])
+
         # through the kit: ingest, evidence, prefill, packets, metrics review
         sl_schema = tmp / "sl-schema.csv"
         sl_schema.write_text("TABLE_SCHEMA,TABLE_NAME,COLUMN_NAME,DATA_TYPE\n" + "".join(

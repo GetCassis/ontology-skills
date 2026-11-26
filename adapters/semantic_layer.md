@@ -13,6 +13,7 @@ Nothing from the layer is trusted on the way in.
 | A dbt project using MetricFlow, in either spec: top-level `semantic_models:` and `metrics:` (classic), or `semantic_model:`, entities, dimensions and metrics on the dbt model itself (newer) | `from_metricflow` | `dbt-labs/jaffle-sl-template` (classic) and `dbt-labs/jaffle-shop` (newer) |
 | A Cube YAML data model (`cubes:`) | `from_cube` | The analytics model in `tam159/next-role` (`analytics/cube/model`) |
 | A LookML project (`.lkml` views and explores, refinements included) | `from_lookml` | Three projects over Google's public thelook_ecommerce data: `bytecodeio/thelook_ecommerce`, `onesecondbefore/lookml-framework`, `looker-open-source/bqml_semantic_search_block` |
+| An Omni model as Omni's git integration writes it: `.view` and `.topic` YAML files and a `relationships` file | `from_omni` | The NHL analytics model in `ssabenoit/ssa-case-study` (`omni/model`, commit e47baa3) |
 | A declared-definitions JSON file, written by hand | `load` | the kit's own tests |
 
 On the TPC-H model:
@@ -53,6 +54,13 @@ On the Cube model:
 - 2 percentiles are rejected: they use ClickHouse's `quantile(0.5)(x)`, which does not parse as
   standard SQL.
 
+On the Omni model:
+- All 63 measures and 38 relationships translate. The measures include derived ratios over
+  other measures and counts filtered on a dimension of the same view.
+- 19 topic descriptions, with the topic's AI context, land on their base view's table.
+- Its 94 views are schema-view overlays, so the expressions are checked here for parsing only.
+  The model ships no schema export of its own to hold them against.
+
 A Power BI `.pbix` file is a compressed binary, so it is not read. Save the model as a PBIP
 project, which writes TMDL, and point `--declared` at its `definition/` folder.
 
@@ -90,9 +98,20 @@ Both write SQL already, so their metrics ship as `translated: false`.
   list, or a numeric comparison. A `number` measure resolves its `${measure}` references when
   none of them carries a filter. An explore's `sql_on` between two fields of two table views
   becomes a join with its relationship.
+- **Omni:** a view in a schema folder (`<SCHEMA>/` or `<DATABASE>.<SCHEMA>/`) is an overlay on
+  that warehouse table: it lists only the fields it adds or overrides, so a field it does not
+  declare is a column. A view can also name its table with `sql_table_name`, or `schema` and
+  `table_name`. A measure's `aggregate_type` and `sql` give its expression. Its structured
+  `filters` (`is`, `not`, comparisons, a list for `IN`) become its filter. A measure with no
+  `aggregate_type` resolves its `${measure}` references when none of them carries a filter.
+  Description, `synonyms` and `ai_context` become the description. A dimension's
+  `all_values` becomes the column's values. A topic's description and AI context describe
+  its base view's table. A `relationships` entry whose `on_sql` equates fields of two views
+  becomes a join with its `relationship_type`.
 - **What goes to review:** derived, cumulative and conversion metrics, medians and
   percentiles, rolling windows, ratios over filtered parts, and filters on another model, cube
-  or view. A cube built on a SQL query, and a LookML derived table, are rejected.
+  or view. A cube built on a SQL query, a LookML derived table and an Omni view defined by
+  `sql` are rejected.
 
 ## DAX: what becomes a metric and what does not
 

@@ -502,7 +502,7 @@ def main():
     ap.add_argument("--declared", type=Path, action="append", default=[],
                     help="a semantic layer's own definitions: a Power BI model saved "
                          "as TMDL, a dbt MetricFlow project, a Cube YAML data model, a "
-                         "LookML project, or a declared-definitions file "
+                         "LookML project, an Omni model, or a declared-definitions file "
                          "(adapters/semantic_layer.md). "
                          "Repeatable")
     args = ap.parse_args()

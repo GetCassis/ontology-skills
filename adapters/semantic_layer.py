@@ -2,7 +2,7 @@
 table docs — normalized into one shape the run validates against the schema
 export before any of it counts as evidence.
 
-Four readers, each checked on public projects:
+Five readers, each checked on public projects:
 
   tmdl        a Power BI semantic model saved as TMDL (the `definition/` folder
               of a PBIP project's `<name>.SemanticModel`)
@@ -11,6 +11,8 @@ Four readers, each checked on public projects:
               dimensions and metrics sit on the dbt model itself
   cube        Cube's YAML data model (`cubes:`)
   lookml      LookML views and explores (`.lkml` files)
+  omni        an Omni model as its git integration writes it (`.view` and
+              `.topic` YAML files, a `relationships` file)
 
 Anything else can be written by hand in the same shape (adapters/semantic_layer.md):
 
@@ -1183,6 +1185,269 @@ def from_lookml(root: Path) -> dict:
     return out
 
 
+# -------------------------------------------------------------------- Omni
+
+_OM_AGG = {"sum": "SUM", "average": "AVG", "min": "MIN", "max": "MAX"}
+_OM_OPS = {"is": "=", "not": "<>", "greater_than": ">", "less_than": "<",
+           "greater_than_or_equal_to": ">=", "less_than_or_equal_to": "<=",
+           "at_least": ">=", "at_most": "<="}
+_OM_REL = {"many_to_one": "many_to_one", "one_to_many": "one_to_many",
+           "one_to_one": "one_to_one", "many_to_many": "many_to_many"}
+
+
+def _om_line(text: str, name: str) -> int:
+    m = re.search(rf"^\s*{re.escape(str(name))}\s*:", text, re.M)
+    return text[:m.start()].count("\n") + 1 if m else 1
+
+
+def _om_lit(v) -> str:
+    if v is True or v is False:
+        return "TRUE" if v else "FALSE"
+    if isinstance(v, (int, float)):
+        return str(v)
+    return "'" + str(v).replace("'", "''") + "'"
+
+
+def from_omni(root: Path) -> dict:
+    """An Omni model directory as Omni's git integration writes it: one YAML
+    `.view` file per view, `.topic` files and one `relationships` file.
+
+    A view in a schema folder (`<SCHEMA>/` or `<DATABASE>.<SCHEMA>/`) is an
+    overlay on a warehouse table: it lists only the fields it adds or
+    overrides, so a field it does not declare is a column of that table.
+    A view defined by `sql` is built in Omni, not one warehouse table."""
+    root = Path(root)
+    out = _empty(f"omni:{_label(root)}")
+    views, topics, rels = {}, {}, []
+    for p in sorted(root.rglob("*")):
+        if not p.is_file() or not (p.suffix in (".view", ".topic")
+                                   or p.name == "relationships"):
+            continue
+        text = p.read_text(errors="replace")
+        rel = p.relative_to(root).as_posix()
+        try:
+            doc = yaml.safe_load(text)
+        except yaml.YAMLError:
+            out["rejects"].append({"kind": "file", "name": rel, "cite": f"{rel}:1",
+                                   "reason": "not valid YAML"})
+            continue
+        if p.name == "relationships":
+            rels += [{**r, "_rel": rel, "_text": text} for r in doc or []
+                     if isinstance(r, dict)]
+        elif p.suffix == ".topic" and isinstance(doc, dict):
+            topics[p.stem] = {**doc, "_rel": rel, "_text": text}
+        elif p.suffix == ".view" and isinstance(doc, dict):
+            folder = p.parent.name if p.parent != root else ""
+            v = {"doc": doc, "rel": rel, "text": text, "stem": p.stem, "folder": folder}
+            names = {doc.get("name") or p.stem}
+            if folder:  # Omni names schema views <database>_<schema>__<table>
+                names.add(f"{folder.replace('.', '_')}__{p.stem}".lower())
+                names.add(f"{folder.split('.')[-1]}__{p.stem}".lower())
+            for n in names:
+                views[n] = v
+
+    def table_of(v):
+        d = v["doc"]
+        if d.get("sql") or d.get("derived_table"):
+            return None
+        if d.get("sql_table_name"):
+            t = str(d["sql_table_name"]).replace('"', "").replace("`", "")
+        elif d.get("table_name"):
+            t = f"{d.get('schema') or v['folder'].split('.')[-1]}.{d['table_name']}"
+        elif v["folder"]:
+            t = f"{v['folder'].split('.')[-1]}.{v['stem']}"
+        else:
+            return None
+        parts = [x for x in t.strip().split(".") if x]
+        return ".".join(parts[-2:]).upper() if parts else None
+
+    def field(v, name):
+        return (v["doc"].get("dimensions") or {}).get(name) or {}
+
+    def dim_sql(v, name, stack=()):
+        if name in stack:
+            raise Untranslatable(f"{name} refers to itself")
+        if name in (v["doc"].get("measures") or {}):
+            raise Untranslatable(f"{name} is a measure, not a column")
+        sql = field(v, name).get("sql")
+        return local(v, sql, stack + (name,)) if sql else name
+
+    def local(v, sql, stack=()):
+        def repl(m):
+            ref = m.group(1)
+            if ref == "TABLE":
+                return ""
+            if "." in ref:
+                vname, _, fname = ref.partition(".")
+                if views.get(vname) is v:
+                    return dim_sql(v, fname, stack)
+                raise Untranslatable(f"reads {ref}: another view, a related table a "
+                                     f"one-table metric cannot hold")
+            return dim_sql(v, ref, stack)
+        sql = re.sub(r"\$\{TABLE\}\.", "", str(sql))
+        return re.sub(r"\$\{([\w.]+)\}", repl, sql).strip()
+
+    def om_filters(v, spec):
+        conds = []
+        for fname, cond in (spec or {}).items():
+            vname, _, short = fname.rpartition(".")
+            if vname and views.get(vname) is not v:
+                raise Untranslatable(f"filters on {fname}: another view, a related "
+                                     f"table a one-table metric cannot hold")
+            col = dim_sql(v, short)
+            if not isinstance(cond, dict):
+                cond = {"is": cond}
+            for op, val in cond.items():
+                if op not in _OM_OPS:
+                    raise Untranslatable(f"an Omni filter operator ({op}) the kit does "
+                                         f"not translate")
+                if val is None:
+                    conds.append(f"{col} IS {'NOT ' if op == 'not' else ''}NULL")
+                elif isinstance(val, list) and op in ("is", "not"):
+                    lits = ", ".join(_om_lit(x) for x in val)
+                    conds.append(f"{col} {'NOT IN' if op == 'not' else 'IN'} ({lits})")
+                elif isinstance(val, (list, dict)):
+                    raise Untranslatable(f"an Omni filter value on {fname} the kit does "
+                                         f"not translate")
+                else:
+                    conds.append(f"{col} {_OM_OPS[op]} {_om_lit(val)}")
+        return conds
+
+    def measure(v, name, stack=()):
+        ms = (v["doc"].get("measures") or {}).get(name)
+        if ms is None:
+            raise Untranslatable(f"{name} is not a measure of {v['stem']}")
+        ms = ms or {}
+        if name in stack:
+            raise Untranslatable(f"{name} refers to itself")
+        typ = str(ms.get("aggregate_type") or "").lower()
+        flts = om_filters(v, ms.get("filters")) if ms.get("filters") else []
+        sql = ms.get("sql")
+        if not typ:  # a measure computed from other measures
+            if not sql:
+                raise Untranslatable("a measure with neither an aggregate nor SQL")
+            sql = str(sql)
+            for ref in re.findall(r"\$\{(\w+)\}", sql):
+                if ref in (v["doc"].get("measures") or {}):
+                    sub, sub_f = measure(v, ref, stack + (name,))
+                    if sub_f:
+                        raise Untranslatable(f"combines measures that carry filters ({ref})")
+                    sql = sql.replace(f"${{{ref}}}", f"({sub})")
+                else:
+                    raise Untranslatable(f"reads {ref} outside an aggregate")
+            if re.search(r"\$\{[\w.]+\}", sql):
+                raise Untranslatable("reads another view's measure")
+            return sql.strip(), flts
+        col = local(v, sql) if sql else None
+        if typ == "count":
+            return (f"COUNT({col})" if col else "COUNT(*)"), flts
+        if typ == "count_distinct" and col:
+            return f"COUNT(DISTINCT {col})", flts
+        if typ in _OM_AGG and col:
+            return f"{_OM_AGG[typ]}({col})", flts
+        raise Untranslatable(f"a {typ} measure has no single SQL expression")
+
+    def described(d):
+        parts = [" ".join(str(d.get("description") or "").split())]
+        if d.get("ai_context"):
+            parts.append("Omni AI context: " + " ".join(str(d["ai_context"]).split()))
+        if d.get("synonyms"):
+            parts.append("Also called: " + ", ".join(str(s) for s in d["synonyms"]) + ".")
+        return " ".join(p for p in parts if p) or None
+
+    done = set()
+    for v in views.values():
+        if id(v) in done:
+            continue
+        done.add(id(v))
+        key, d, vcite = table_of(v), v["doc"], f"{v['rel']}:1"
+        if not key:
+            if d.get("measures") or d.get("dimensions"):
+                out["rejects"].append({"kind": "table", "name": v["stem"], "cite": vcite,
+                                       "reason": "a view built in Omni from a query, not "
+                                                 "one warehouse table"})
+            continue
+        if described(d):
+            out["tables"].append({"table": key, "description": described(d), "cite": vcite})
+        for fname, f in (d.get("dimensions") or {}).items():
+            f = f or {}
+            if f.get("sql") and not re.fullmatch(r"\s*(?:\$\{TABLE\}\.)?\w+\s*", str(f["sql"])):
+                continue  # a computed dimension is not a column
+            column = re.sub(r"^\s*(?:\$\{TABLE\}\.)?", "", str(f.get("sql") or fname)).strip()
+            vals = f.get("all_values")
+            if described(f) or vals:
+                out["columns"].append({"table": key, "column": column,
+                                       "description": described(f),
+                                       **({"enum_values": vals} if isinstance(vals, list)
+                                          and vals else {}),
+                                       "cite": f"{v['rel']}:{_om_line(v['text'], fname)}"})
+        for mname, ms in (d.get("measures") or {}).items():
+            ms = ms or {}
+            base = {"name": f"{v['stem']}.{mname}", "language": "omni",
+                    "cite": f"{v['rel']}:{_om_line(v['text'], mname)}",
+                    "original_expression": json.dumps(
+                        {k: ms.get(k) for k in ("aggregate_type", "sql", "filters")
+                         if ms.get(k) is not None}, sort_keys=True)}
+            try:
+                expr, flts = measure(v, mname)
+            except Untranslatable as e:
+                out["review"].append({**base, "reason": str(e)})
+                continue
+            out["metrics"].append({**base, "expression": expr, "table": key,
+                                   "filters": " AND ".join(flts) or None,
+                                   "translated": False, "description": described(ms)})
+    for t, td in topics.items():
+        bv = views.get(str(td.get("base_view") or ""))
+        key = bv and table_of(bv)
+        text = " ".join(x for x in [
+            " ".join(str(td.get("description") or "").split()),
+            ("Omni AI context: " + " ".join(str(td["ai_context"]).split()))
+            if td.get("ai_context") else ""] if x)
+        if key and text:
+            out["tables"].append({"table": key, "description": f"Omni topic {t}: {text}",
+                                  "cite": f"{td['_rel']}:1"})
+    seen = set()
+    for r in rels:
+        a, b = views.get(str(r.get("join_from_view"))), views.get(str(r.get("join_to_view")))
+        name = f"{r.get('join_from_view')} -> {r.get('join_to_view')}"
+        cite = f"{r['_rel']}:1"
+        m = re.search(rf"join_from_view:\s*{re.escape(str(r.get('join_from_view')))}\s*\n"
+                      rf"\s*join_to_view:\s*{re.escape(str(r.get('join_to_view')))}",
+                      r["_text"])
+        if m:
+            cite = f"{r['_rel']}:{r['_text'][:m.start()].count(chr(10)) + 1}"
+        try:
+            if not (a and b and table_of(a) and table_of(b)):
+                raise Untranslatable("a side is not a warehouse-table view")
+            pairs = []
+            for cond in re.split(r"(?i)\s+and\s+", str(r.get("on_sql") or "")):
+                cm = re.fullmatch(r"\s*\$\{(\w+)\.(\w+)\}\s*=\s*\$\{(\w+)\.(\w+)\}\s*", cond)
+                if not cm:
+                    raise Untranslatable("not field equalities")
+                la, lf, ra, rf = cm.groups()
+                if views.get(la) is b and views.get(ra) is a:
+                    la, lf, ra, rf = ra, rf, la, lf
+                if not (views.get(la) is a and views.get(ra) is b):
+                    raise Untranslatable("the condition does not name both views")
+                lc, rc = dim_sql(a, lf), dim_sql(b, rf)
+                if not (re.fullmatch(r"\w+", lc) and re.fullmatch(r"\w+", rc)):
+                    raise Untranslatable("a side is computed, not a column")
+                pairs.append(f"{lc} = {rc}")
+        except Untranslatable as e:
+            out["rejects"].append({"kind": "join", "name": name, "cite": cite,
+                                   "reason": str(e)})
+            continue
+        pair = (table_of(a), table_of(b), tuple(pairs))
+        if pair in seen:
+            continue
+        seen.add(pair)
+        out["joins"].append({"left": pair[0], "right": pair[1], "on": pairs,
+                             "relationship": _OM_REL.get(str(r.get("relationship_type")),
+                                                         "many_to_one"),
+                             "active": True, "cite": cite})
+    return out
+
+
 def _line(text: str, name) -> int:
     m = re.search(rf":\s*\+?{re.escape(str(name).lstrip('+'))}\s*\{{", text)
     return text[:m.start()].count("\n") + 1 if m else 1
@@ -1213,7 +1478,10 @@ def load(path: Path) -> dict:
         return from_tmdl(path)
     if any(path.rglob("*.lkml")):
         return from_lookml(path)
-    ymls = list(path.rglob("*.yml")) + list(path.rglob("*.yaml"))
+    if any(path.rglob("*.topic")) or any(path.rglob("*.view")) \
+            or any(path.rglob("relationships")):
+        return from_omni(path)
+    ymls =list(path.rglob("*.yml")) + list(path.rglob("*.yaml"))
     for p in ymls:
         if re.search(r"^cubes\s*:", p.read_text(errors="replace"), re.M):
             return from_cube(path)
@@ -1222,7 +1490,8 @@ def load(path: Path) -> dict:
                      p.read_text(errors="replace"), re.M):
             return from_metricflow(path)
     raise RuntimeError(f"{path}: neither a declared-definitions file, a TMDL folder, "
-                       f"a MetricFlow project, a Cube data model, nor a LookML project")
+                       f"a MetricFlow project, a Cube data model, a LookML project, "
+                       f"nor an Omni model")
 
 
 def _resolve(key, schema):

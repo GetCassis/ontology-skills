@@ -19,7 +19,7 @@ Everything in it is a CANDIDATE with provenance, not a truth.
   users query that are NOT in scope: name them in QUESTIONS.md where they block a metric.
   `nonsummable.json` lists tables that stack aggregation levels.
   `workspace/declared.json` holds what a semantic layer declares (a Power BI TMDL model,
-  MetricFlow YAML, a Cube YAML model, LookML; `adapters/semantic_layer.md`), already held against the
+  MetricFlow YAML, a Cube YAML model, LookML, an Omni model; `adapters/semantic_layer.md`), already held against the
   schema export.
   Each declared metric is in `metric_candidates.json` and counts as one corroboration source.
   `apply_synthesis.py` writes each one whose table is modelled as a metric file, with a
